@@ -8,7 +8,15 @@ An integrated community desktop experience for official DeepSeek Chat, local Cha
 
 ## Preview
 
-Preview screenshots for this project's accepted build are pending publication. The existing files under `assets/screenshots/` are inherited upstream illustrations, not evidence of this build's acceptance.
+### Chat
+
+![DeepSeek Desktop — Chat](assets/screenshots/chat-mode-current.png)
+
+### Harness
+
+![DeepSeek Desktop — Harness](assets/screenshots/harness-mode-current.png)
+
+Current macOS Apple Silicon build. The `*-mode-home.png` files under `assets/screenshots/` are inherited upstream illustrations and do not show this build.
 
 ## Features
 
@@ -111,7 +119,7 @@ A real GUI update-to-rollback run remains an upstream follow-up: at sealing, off
 
 ## Known limitations
 
-Cold Harness installation depends on registry availability and may take several minutes. Future official releases can change startup, authentication, or storage behavior. The official Harness frontend may not honor Desktop theme preferences. Chat embedding can be affected by website policy, WAF, or authentication-origin changes. This project supplies no official service authorization and no stable-release or cross-platform certification.
+Cold Harness installation depends on registry availability and may take several minutes. Future official releases can change startup, authentication, or storage behavior. Chat follows the Desktop theme preference. Harness retains its own official theme setting and must currently be configured from within Harness. Chat embedding can be affected by website policy, WAF, or authentication-origin changes. This project supplies no official service authorization and no stable-release or cross-platform certification.
 
 ## License
 

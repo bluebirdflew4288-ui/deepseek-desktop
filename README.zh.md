@@ -8,7 +8,15 @@
 
 ## 预览
 
-本项目已验收版本的预览截图待发布。`assets/screenshots/` 中现有图片继承自上游，仅作示意，不作为本版本的验收证据。
+### Chat
+
+![DeepSeek Desktop — Chat](assets/screenshots/chat-mode-current.png)
+
+### Harness
+
+![DeepSeek Desktop — Harness](assets/screenshots/harness-mode-current.png)
+
+当前 macOS Apple Silicon 已验收构建。`assets/screenshots/` 下的 `*-mode-home.png` 为继承自上游的示意图，不代表本构建。
 
 ## 功能
 
@@ -111,7 +119,7 @@ Chat Memory 不会注入 Harness 提示词。进程归属检查防止过期或�
 
 ## 已知限制
 
-Harness 首次安装依赖 registry 可用性，可能需要数分钟。未来官方版本可能改变启动、认证或存储行为。官方 Harness 前端可能不采用 Desktop 主题偏好。Chat 内嵌体验可能受网站政策、WAF 或认证来源变化影响。本项目不提供官方服务授权，也不宣称稳定发布或跨平台认证。
+Harness 首次安装依赖 registry 可用性，可能需要数分钟。未来官方版本可能改变启动、认证或存储行为。Chat 跟随 Desktop 的主题偏好；Harness 保留官方自身的主题设置，目前需要在 Harness 内部设置中单独选择浅色、深色或跟随系统。Chat 内嵌体验可能受网站政策、WAF 或认证来源变化影响。本项目不提供官方服务授权，也不宣称稳定发布或跨平台认证。
 
 ## 许可证
 

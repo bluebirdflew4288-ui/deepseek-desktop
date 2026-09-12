@@ -29,7 +29,7 @@ pnpm --filter @deepseek-ai/dsh-desktop run test:electron
 
 全新安装默认选择 Harness。后续启动会恢复用户通过本地标题栏切换器选择的上一个模式。两个模式的内容视图都从已有 44px 操作系统标题栏下方开始，因此官方 Harness Header、交通灯和切换器不会占用同一组像素。内容视图会填满剩余高度，并在每次窗口调整大小时使用同一组边界重新计算。关闭状态本地 chrome 只紧密包围分段切换器与可选 Chat 操作控件。只有主进程扩展这些边界并确认已应用布局后，Chat 操作菜单或确认对话框才会显示。Harness 独立启动，Chat 只在首次选择后创建；切换模式会保留两个健康视图，而不会重新加载它们。
 
-chrome 视图保持透明。164px 分段切换器渲染等宽的 `Chat` 与 `Harness` 选项；点击任一分段都会直接选择对应模式，不存在模式菜单、箭头、产品图标、外框或紧凑缩写。当前模式拥有共享的 `light`／`dark`／`system` 偏好，Desktop 会把该偏好应用到隐藏模式。Harness 使用自身的 `ThemeRuntime` 桥，Chat 使用带版本的官方主题偏好；只有应用到隐藏 Chat 的偏好改变了存储值时才会重新加载 Chat。本地控件通过 Electron 解析 `system`，在亮色内容上显示深色文字，在暗色内容上显示浅色文字。隔离 Chat preload 还只会上报规范化的不透明计算背景色；已有标题栏底色使用该颜色并保留配色后备，未支持的 CSS 值会被拒绝，Chat 菜单和对话框继续使用不透明主题表面。
+chrome 视图保持透明。164px 分段切换器渲染等宽的 `Chat` 与 `Harness` 选项；点击任一分段都会直接选择对应模式，不存在模式菜单、箭头、产品图标、外框或紧凑缩写。Chat 跟随 Desktop 的 `light`／`dark`／`system` 偏好；Desktop 也会在 Chat 隐藏时应用该偏好，并仅在存储值改变时重新加载 Chat。Harness 保留官方自身的主题设置，目前需要在 Harness 内部配置；Desktop 的主题入口不会控制它。本地控件通过 Electron 解析 `system`，在亮色内容上显示深色文字，在暗色内容上显示浅色文字。隔离 Chat preload 还只会上报规范化的不透明计算背景色；已有标题栏底色使用该颜色并保留配色后备，未支持的 CSS 值会被拒绝，Chat 菜单和对话框继续使用不透明主题表面。
 
 Harness 保留现有会话、工作区、agent（智能体）配置和回环 Host。Chat 显示 `https://chat.deepseek.com/` 上的官方网站，不会成为 Harness 模型提供方。一个启用沙箱且上下文隔离的 preload 会访问两个经过校验的官方零版本存储项：它同步 `__appKit_@deepseek/chat_themePreference`，并在每个 Chat document 初始化前，只把保留的 `__appKit_@deepseek/chat_lastSessionValue.value.siderCollapsed` 从 `true` 改为 `false`。因此，Chat 创建或重新加载后会以展开侧栏启动；如果用户随后收起侧栏，保留的 Chat 视图会在模式切换期间维持该状态。缺失或未知的侧栏存储不会被修改，同一存储项中的其他页面设置会被保留，preload 也不会向主世界暴露 API 或注入 DOM 控件。Desktop 不会读取 Chat Cookie、凭据、对话、网络响应或网站的其他存储。遇到未知主题存储版本时，主题同步会停用，但 Chat 仍保持可用。
 
