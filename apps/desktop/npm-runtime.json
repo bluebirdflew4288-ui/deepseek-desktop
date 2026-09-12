@@ -1,0 +1,12 @@
+{
+  "name": "npm",
+  "version": "11.12.1",
+  "license": "Artistic-2.0",
+  "repository": "https://github.com/npm/cli",
+  "registry": "https://registry.npmjs.org/",
+  "tarball": "https://registry.npmjs.org/npm/-/npm-11.12.1.tgz",
+  "integrity": "sha512-zcoUuF1kezGSAo0CqtvoLXX3mkRqzuqYdL6Y5tdo8g69NVV3CkjQ6ZBhBgB4d7vGkPcV6TcvLi3GRKPDFX+xTA==",
+  "unpackedSize": 10993397,
+  "cliEntry": "bin/npm-cli.js",
+  "licenseFile": "LICENSE"
+}

@@ -1,0 +1,86 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #f4f6f5;
+  --surface: #ffffff;
+  --text: #17201e;
+  --muted: #66716e;
+  --border: #dce2e0;
+  --accent: #087f71;
+  --accent-soft: #e2f2ef;
+  --danger: #a33a32;
+  background: var(--bg);
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171c1b;
+    --surface: #232a28;
+    --text: #f1f5f4;
+    --muted: #a7b1ae;
+    --border: #3a4441;
+    --accent: #55c8b8;
+    --accent-soft: #193d37;
+    --danger: #f08a80;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 560px; background: var(--bg); }
+header {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center;
+  justify-content: space-between; gap: 20px; padding: 28px 32px 22px;
+  border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(14px);
+}
+.eyebrow { margin: 0 0 3px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+h1 { margin: 0; font-size: 27px; letter-spacing: -.025em; }
+#summary { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+main { max-width: 900px; margin: 0 auto; padding: 22px 32px 42px; }
+.toolbar { display: grid; grid-template-columns: minmax(210px, 1fr) 132px auto auto; gap: 8px; }
+button, input, select, textarea {
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+  color: var(--text); font: inherit;
+}
+button { min-height: 36px; padding: 0 12px; cursor: pointer; font-size: 13px; font-weight: 650; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input, select, textarea { width: 100%; padding: 9px 11px; }
+textarea { resize: vertical; line-height: 1.5; }
+.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.danger { color: var(--danger); }
+#notice { min-height: 18px; margin: 10px 2px; color: var(--muted); font-size: 12px; }
+#notice[data-error='true'] { color: var(--danger); }
+.editor { margin: 0 0 14px; padding: 18px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); }
+.editor label { display: grid; gap: 6px; margin-bottom: 12px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.field-row { display: flex; gap: 12px; }
+.field-row label:first-child { width: 150px; }
+.grow { flex: 1; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.list { display: grid; gap: 10px; }
+.card { padding: 16px 17px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: 0 1px 2px rgba(0, 0, 0, .03); }
+.card-heading, .card-heading > div, footer, footer > div { display: flex; align-items: center; }
+.card-heading, footer { justify-content: space-between; gap: 12px; }
+.card-heading > div { min-width: 0; gap: 8px; }
+h2 { overflow: hidden; margin: 0; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.badge, .tag { display: inline-block; padding: 3px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 700; }
+.icon-button { width: 34px; padding: 0; color: var(--muted); font-size: 20px; }
+.icon-button[data-pinned='true'] { color: #ca8b18; }
+.content { margin: 11px 0; color: var(--text); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; min-height: 20px; }
+.tag { background: var(--bg); color: var(--muted); font-weight: 600; }
+footer { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border); }
+footer time { color: var(--muted); font-size: 11px; }
+footer > div { gap: 6px; }
+footer button { min-height: 30px; padding: 0 9px; }
+.empty { display: grid; place-items: center; gap: 6px; padding: 70px 20px; color: var(--muted); text-align: center; }
+.empty strong { color: var(--text); }
+[hidden] { display: none !important; }
+@media (max-width: 700px) {
+  body { min-width: 0; }
+  header, main { padding-left: 18px; padding-right: 18px; }
+  .toolbar { grid-template-columns: 1fr 120px; }
+  .field-row { display: grid; }
+  .field-row label:first-child { width: auto; }
+}

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="manager.css">
+  <title>DeepSeek Memory</title>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">DeepSeek Desktop</p>
+      <h1>Memory</h1>
+      <p id="summary">正在读取本地记忆…</p>
+    </div>
+    <button id="add" class="primary" type="button">添加记忆</button>
+  </header>
+  <main>
+    <section class="toolbar" aria-label="记忆筛选">
+      <input id="search" type="search" placeholder="搜索标题、内容或标签" autocomplete="off">
+      <select id="filter" aria-label="按类型筛选">
+        <option value="all">全部类型</option>
+        <option value="user">用户</option>
+        <option value="feedback">纠正</option>
+        <option value="topic">主题</option>
+        <option value="reference">参考</option>
+      </select>
+      <button id="import" type="button">导入 JSON</button>
+      <button id="export" type="button">导出 JSON</button>
+    </section>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <section id="editor" class="editor" hidden>
+      <form id="form">
+        <input id="memory-id" type="hidden">
+        <div class="field-row">
+          <label>类型
+            <select id="type">
+              <option value="user">用户</option>
+              <option value="feedback">纠正</option>
+              <option value="topic">主题</option>
+              <option value="reference">参考</option>
+            </select>
+          </label>
+          <label class="grow">标题
+            <input id="name" required maxlength="120" placeholder="例如：代码缩进偏好">
+          </label>
+        </div>
+        <label>内容
+          <textarea id="content" required maxlength="8000" rows="4" placeholder="只记录对未来对话长期有帮助的信息"></textarea>
+        </label>
+        <label>标签
+          <input id="tags" placeholder="使用逗号分隔">
+        </label>
+        <div class="form-actions">
+          <button id="cancel" type="button">取消</button>
+          <button class="primary" type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+    <section id="list" class="list" aria-label="记忆列表"></section>
+    <section id="empty" class="empty" hidden>
+      <strong>没有符合条件的记忆</strong>
+      <span>可以调整搜索条件，或添加一条长期记忆。</span>
+    </section>
+  </main>
+  <template id="card-template">
+    <article class="card">
+      <div class="card-heading">
+        <div>
+          <span class="badge"></span>
+          <h2></h2>
+        </div>
+        <button class="pin icon-button" type="button" aria-label="置顶">☆</button>
+      </div>
+      <p class="content"></p>
+      <div class="tags"></div>
+      <footer>
+        <time></time>
+        <div>
+          <button class="edit" type="button">编辑</button>
+          <button class="delete danger" type="button">删除</button>
+        </div>
+      </footer>
+    </article>
+  </template>
+  <script type="module" src="manager.js"></script>
+</body>
+</html>

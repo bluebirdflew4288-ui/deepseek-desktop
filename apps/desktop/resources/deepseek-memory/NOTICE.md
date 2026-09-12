@@ -1,0 +1,7 @@
+# DeepSeek++ Memory attribution
+
+This directory contains a modified, Memory-only derivative of DeepSeek++ 1.14.0 from `zhu1090093659/deepseek-pp`, source revision `0a02c72b135bf2936e11aa78fd6136931ed65908`.
+
+The reviewed upstream revision declares Apache-2.0 but does not identify a copyright holder, ships no separate NOTICE, and carries no per-file license headers, so `LICENSE` here holds the unmodified upstream Apache-2.0 text. This derivative adds no upstream copyright-holder statement of its own. Two files in this directory, `memory-store.js` and `memory-selector.js`, add a header naming the upstream files they derive from; the remaining files were implemented for the Electron-specific integration and do not carry upstream per-file headers.
+
+The derivative replaces the original extension composition, background service worker, persistence adapter, request hook, UI composition, and build dependencies with an Electron-specific implementation. It retains only the Memory schema and IndexedDB concepts, memory selection and prompt augmentation behavior, automatic save protocol, request/response interception behavior, explicit local Memory management operations, and JSON import/export behavior. It does not include the upstream MCP, shell, native messaging, browser control, debugger, identity/OAuth, WebDAV/cloud sync, Pyodide, offscreen, floating chat, automation, pet, theme enhancement, web search/fetch, official API, or arbitrary-host capabilities.

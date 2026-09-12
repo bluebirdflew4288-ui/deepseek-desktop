@@ -1,0 +1,3 @@
+/* Simplified Chinese bundle metadata: the product name is never translated. */
+CFBundleDisplayName = "DeepSeek Desktop";
+CFBundleName = "DeepSeek Desktop";

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-08-deepseek-chat-memory.md
+2026-09-08-deepseek-chat-memory.md: 48a029dee65278e54746819185316b9150c607fc
+2026-09-08-deepseek-chat-memory.zh.md: aabe5e0d70ac6d22fb4861e94dc71be411d49485

@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "DeepSeek Desktop Memory",
+  "description": "Local long-term memory for the embedded DeepSeek Chat surface.",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2zP76SqwC2MTQANSnsEeGelahco8NtE7jWoCYp4RwcGPFf/xtXXFZFM3JwgL5CL2Td53IOq/abgFQCDpkR6+xBdJXWzNvTQ3JneOONSs08zch2TJanaK49b9s8p4SnwsOn+Dbyt8JOYp50oXr77kfwovdkci51Ec+A7HQ9oPKBXtLucxJPq8MiEz3ovFT8r7Fw+OZ3LlzliW2e0jhCAM78gYDrhSmEGhMa2dWvdeb2KaDVDqf48X3WgSanzJcfs8Ou7XUaKClawFXCBaRK0unGqsI/nITXI2eph63D0dJhfN0MYav8caq2QH74ddYyyUGJDBANFbaX88hUo3qvZW4wIDAQAB",
+  "host_permissions": [
+    "https://chat.deepseek.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "main-world.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

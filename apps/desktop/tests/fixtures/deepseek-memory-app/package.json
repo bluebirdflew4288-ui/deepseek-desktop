@@ -1,0 +1,6 @@
+{
+  "name": "deepseek-memory-electron-fixture",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}
