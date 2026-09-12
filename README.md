@@ -119,7 +119,7 @@ A real GUI update-to-rollback run remains an upstream follow-up: at sealing, off
 
 ## Known limitations
 
-Cold Harness installation depends on registry availability and may take several minutes. Future official releases can change startup, authentication, or storage behavior. Chat follows the Desktop theme preference. Harness retains its own official theme setting and must currently be configured from within Harness. Chat embedding can be affected by website policy, WAF, or authentication-origin changes. This project supplies no official service authorization and no stable-release or cross-platform certification.
+Cold Harness installation depends on registry availability and may take several minutes. Future official releases can change startup, authentication, or storage behavior. Desktop's theme entry governs the Desktop shell and Chat. The official Harness WebUI keeps its own `light`/`dark`/`system` setting and cannot reliably follow the Desktop theme entry; this is an accepted architectural boundary, because no stable official theme-control interface exists to depend on and forcing parity would require coupling to Harness internals or forking its official frontend. If a future official release exposes a stable external theme-control interface, a unified entry can be re-evaluated. Chat embedding can be affected by website policy, WAF, or authentication-origin changes. This project supplies no official service authorization and no stable-release or cross-platform certification.
 
 ## License
 
