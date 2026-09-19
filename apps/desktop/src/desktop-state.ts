@@ -4,6 +4,7 @@
  * the fields it does not carry, so callers hold the whole state and persist it.
  */
 
+import { parseNotificationState, type DesktopNotificationState } from './desktop-notifications.ts'
 import { readFile } from 'node:fs/promises'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import type { DesktopMode } from './desktop-mode.ts'
@@ -25,6 +26,7 @@ interface DesktopStateDocumentV2 {
   readonly mode: DesktopMode
   readonly theme?: DesktopThemePreference
   readonly locale?: DesktopShellLocale
+  readonly notifications?: DesktopNotificationState
 }
 
 /** Durable desktop state read from or written to the state file. */
@@ -41,6 +43,7 @@ export interface DesktopState {
    * system's UI language decides.
    */
   readonly locale?: DesktopShellLocale
+  readonly notifications?: DesktopNotificationState
 }
 
 /**
@@ -83,6 +86,7 @@ export async function loadDesktopState(filename: string): Promise<DesktopState> 
     mode,
     ...isDesktopThemePreference(document.theme) ? { theme: document.theme } : {},
     ...isDesktopShellLocale(document.locale) ? { locale: document.locale } : {},
+    ...document.notifications === undefined ? {} : { notifications: requireNotifications(document.notifications) },
   }
 }
 
@@ -97,6 +101,13 @@ export async function saveDesktopState(filename: string, state: DesktopState): P
     mode: state.mode,
     ...state.theme === undefined ? {} : { theme: state.theme },
     ...state.locale === undefined ? {} : { locale: state.locale },
+    ...state.notifications === undefined ? {} : { notifications: state.notifications },
   }
   await writeFileAtomic(filename, `${JSON.stringify(document)}\n`, { mode: 0o600, dirMode: 0o700 })
+}
+
+function requireNotifications(value: unknown): DesktopNotificationState {
+  const state = parseNotificationState(value)
+  if (state === undefined) throw new Error('desktop notification state is invalid')
+  return state
 }

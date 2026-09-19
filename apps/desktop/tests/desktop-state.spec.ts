@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadDesktopState, saveDesktopState } from '../src/desktop-state.ts'
+import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/desktop-notifications.ts'
 
 const roots: string[] = []
 
@@ -72,5 +73,37 @@ describe('desktop state persistence', () => {
       await writeFile(filename, `${content}\n`)
       await expect(loadDesktopState(filename), content).rejects.toThrow('desktop state is invalid')
     }
+  })
+
+  it('retains an unseen Harness attention flag across a restart', async () => {
+    const filename = await stateFile()
+    await saveDesktopState(filename, {
+      mode: 'harness',
+      notifications: {
+        preferences: DEFAULT_NOTIFICATION_PREFERENCES,
+        events: [],
+        harnessAttention: true,
+      },
+    })
+    // Absent means false, so a set dot is the only value that has to survive.
+    const written: unknown = JSON.parse(await readFile(filename, 'utf8'))
+    expect((written as { notifications: { harnessAttention: boolean } }).notifications.harnessAttention).toBe(true)
+    const restored = await loadDesktopState(filename)
+    expect(restored.notifications?.harnessAttention).toBe(true)
+    expect(restored.notifications?.events).toEqual([])
+  })
+
+  it('keeps a cleared Harness attention flag cleared across a restart', async () => {
+    const filename = await stateFile()
+    await saveDesktopState(filename, {
+      mode: 'harness',
+      notifications: {
+        preferences: DEFAULT_NOTIFICATION_PREFERENCES,
+        events: [],
+        harnessAttention: false,
+      },
+    })
+    const restored = await loadDesktopState(filename)
+    expect(restored.notifications?.harnessAttention).not.toBe(true)
   })
 })

@@ -4,12 +4,13 @@
  * their own, so the two menus cannot disagree and neither can drift from the
  * persisted preference.
  *
- * The groups are deliberately small — appearance and language — because the
+ * The groups hold appearance, language, and notification presentation because the
  * Harness and Chat surfaces own their own settings and are not mirrored here.
  * A future desktop-owned setting joins this model rather than growing a second
  * menu tree.
  */
 
+import { DEFAULT_NOTIFICATION_PREFERENCES, type NotificationPreferences } from './desktop-notifications.ts'
 import { type DesktopThemePreference } from './desktop-theme.ts'
 import {
   DESKTOP_SHELL_LOCALES,
@@ -28,6 +29,8 @@ const THEME_PRESENTATION_ORDER = ['system', 'light', 'dark'] as const satisfies 
 
 /** What one settings choice does when the user picks it. */
 export type ShellSettingsAction =
+  | { readonly kind: 'custom-notification-accent' }
+  | { readonly kind: 'notifications'; readonly preferences: NotificationPreferences }
   | { readonly kind: 'theme'; readonly preference: DesktopThemePreference }
   | { readonly kind: 'locale'; readonly locale: DesktopShellLocale }
 
@@ -41,16 +44,18 @@ export interface ShellSettingsChoice {
   readonly action: ShellSettingsAction
 }
 
-/** One labelled radio group, such as Appearance or Language. */
+/** One labelled group of radio choices or independent checkboxes. */
 export interface ShellSettingsGroup {
+  readonly type?: 'checkbox' | 'radio'
   /** Group heading, rendered in the active shell locale. */
   readonly label: string
-  /** Mutually exclusive choices, exactly one of them checked. */
+  /** Choices use the group type; radio groups mark the selected preference. */
   readonly choices: readonly ShellSettingsChoice[]
 }
 
 /** The desktop-owned preferences both shell menus render. */
 export interface DesktopShellPreferences {
+  readonly notifications?: NotificationPreferences
   /** Appearance preference: follow the system, or pin a palette. */
   readonly theme: DesktopThemePreference
   /** Language of the desktop-owned surfaces. */
@@ -78,6 +83,16 @@ export interface ShellMenuModel {
  */
 export function shellSettingsGroups(preferences: DesktopShellPreferences): ShellSettingsGroup[] {
   const strings = shellStrings(preferences.locale)
+  const p = preferences.notifications ?? DEFAULT_NOTIFICATION_PREFERENCES
+  const zh = preferences.locale === 'zh-CN'
+  const switches = [
+    ['chat', zh ? 'Chat 回复' : 'Chat replies'],
+    ['completed', zh ? 'Harness 完成' : 'Harness completed'],
+    ['failed', zh ? 'Harness 失败' : 'Harness failed'],
+    ['actionRequired', zh ? 'Harness 等待操作' : 'Harness action required'],
+    ['dock', zh ? '显示 Dock 未读数量' : 'Show Dock unread count'],
+    ['indicators', zh ? '显示站内未读提示' : 'Show in-app unread indicators'],
+  ] as const
   return [
     {
       label: strings.appearance,
@@ -94,6 +109,17 @@ export function shellSettingsGroups(preferences: DesktopShellPreferences): Shell
         checked: locale === preferences.locale,
         action: { kind: 'locale', locale },
       })),
+    },
+    {
+      label: zh ? '通知' : 'Notifications', type: 'checkbox',
+      choices: switches.map(([key, label]) => ({ label, checked: p[key], action: { kind: 'notifications', preferences: { ...p, [key]: !p[key] } } })),
+    },
+    {
+      label: zh ? '通知强调色' : 'Notification Accent',
+      choices: [...([
+        ['theme', zh ? '跟随主题' : 'Follow Theme'], ['deepseek', 'DeepSeek'],
+        ['blue', zh ? '蓝色' : 'Blue'], ['purple', zh ? '紫色' : 'Purple'], ['green', zh ? '绿色' : 'Green'],
+      ] as const).map(([accent, label]): ShellSettingsChoice => ({ label, checked: p.accent === accent, action: { kind: 'notifications', preferences: { ...p, accent } } })), { label: zh ? '自定义颜色…' : 'Custom color…', checked: p.accent.startsWith('#'), action: { kind: 'custom-notification-accent' } }],
     },
   ]
 }

@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 const MAX_PROCESS_OUTPUT_CHARS = 32_768
 
 /** Grace between SIGTERM and SIGKILL when a child overruns its bound. */
-const KILL_GRACE_MS = 5_000
+export const KILL_GRACE_MS = 5_000
 
 /**
  * Search path handed to every managed child.
@@ -69,6 +69,13 @@ export interface ManagedProcessRequest {
   readonly env: NodeJS.ProcessEnv
   /** Bound before the child is terminated. */
   readonly timeoutMs: number
+  /**
+   * Abandoning signal. Aborting terminates the child the way an overrun does:
+   * `SIGTERM`, then `SIGKILL` one grace period later. A caller may abort only a
+   * child whose entire work it can discard, and it must own every directory the
+   * child writes to.
+   */
+  readonly signal?: AbortSignal
 }
 
 /** Runs one managed child to completion. */
@@ -78,14 +85,17 @@ export type ManagedProcessRunner = (request: ManagedProcessRequest) => Promise<M
  * Run one child process to completion with a bounded output tail.
  *
  * The child is terminated at `timeoutMs` and killed one grace period later, so
- * an operation that stalls cannot hold a transaction open indefinitely.
- * @param request - Executable, arguments, environment, and bound.
+ * an operation that stalls cannot hold a transaction open indefinitely. An
+ * aborting `signal` produces the same escalation on request rather than on
+ * elapsed time, and the promise still settles with the child's exit outcome.
+ * @param request - Executable, arguments, environment, bound, and abort signal.
  * @returns The exit outcome and the retained output tail.
  */
 export function runManagedProcess(request: ManagedProcessRequest): Promise<ManagedProcessOutcome> {
   return new Promise<ManagedProcessOutcome>((resolve, reject) => {
     let output = ''
     let outputTruncated = false
+    let killTimer: NodeJS.Timeout | undefined
     const child = spawn(request.command, [...request.args], {
       env: request.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -99,12 +109,21 @@ export function runManagedProcess(request: ManagedProcessRequest): Promise<Manag
     child.stdout.on('data', append)
     child.stderr.on('data', append)
 
-    const terminate = setTimeout(() => { child.kill('SIGTERM') }, request.timeoutMs)
-    const kill = setTimeout(() => { child.kill('SIGKILL') }, request.timeoutMs + KILL_GRACE_MS)
-    const release = (): void => {
-      clearTimeout(terminate)
-      clearTimeout(kill)
+    const terminate = (): void => {
+      child.kill('SIGTERM')
+      if (killTimer === undefined) {
+        killTimer = setTimeout(() => { child.kill('SIGKILL') }, KILL_GRACE_MS)
+      }
     }
+    const terminateTimer = setTimeout(terminate, request.timeoutMs)
+    const release = (): void => {
+      clearTimeout(terminateTimer)
+      if (killTimer !== undefined) clearTimeout(killTimer)
+      request.signal?.removeEventListener('abort', terminate)
+    }
+    request.signal?.addEventListener('abort', terminate, { once: true })
+    // A signal that aborted before the child started never fires a later event.
+    if (request.signal?.aborted === true) terminate()
     child.once('error', (error) => {
       release()
       reject(error)

@@ -25,6 +25,7 @@ import {
 import {
   createManagedHarnessRuntime,
   type ManagedHarnessRuntime,
+  type ManagedHarnessTransactionProgress,
 } from '../src/managed-harness.ts'
 import {
   parseManagedHarnessState,
@@ -72,6 +73,8 @@ interface HarnessFixtures {
   readonly latestCalls: number[]
   readonly installed: string[]
   readonly healthChecked: string[]
+  /** Every stage report the runtime published, in the order it published them. */
+  readonly stages: ManagedHarnessTransactionProgress[]
   /** Versions whose install the installer fails. */
   readonly failInstall: Set<string>
   /** Versions whose health check fails. */
@@ -79,6 +82,25 @@ interface HarnessFixtures {
   /** Versions the installer materializes with a mismatched manifest. */
   readonly wrongVersion: Set<string>
   readonly processes: Array<{ command: string; args: readonly string[] }>
+  /** Whether the next install waits for `releaseInstall` or an abandoned signal. */
+  holdsInstall: boolean
+  /** Let a held install finish, standing in for a package manager that exits. */
+  releaseInstall(): void
+  /** Whether the next registry round trip waits for `releaseLookup`. */
+  holdsRelease: boolean
+  /** Let a held registry round trip answer. */
+  releaseLookup(): void
+  /** Whether the next staging record cancels the transaction from inside it,
+   * which is the last await before the package manager is started. */
+  cancelOnStagingRecord: boolean
+  /** Whether the next health check waits for `releaseHealth`. */
+  holdsHealth: boolean
+  /** Let a held health check finish. */
+  releaseHealth(): void
+  /** Abandoning signals the installer received, one per install it ran. */
+  readonly installSignals: Array<AbortSignal | undefined>
+  /** Latest progress a registry round trip was asked to honor. */
+  readonly releaseSignals: Array<AbortSignal | undefined>
 }
 
 /**
@@ -89,16 +111,29 @@ interface HarnessFixtures {
  * @returns The runtime and the record of every call its dependencies received.
  */
 async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: string): Promise<HarnessFixtures> {
+  let releaseHeldInstall: (() => void) | undefined
+  let releaseHeldLookup: (() => void) | undefined
+  let releaseHeldHealth: (() => void) | undefined
   const state: HarnessFixtures = {
     runtime: undefined as unknown as ManagedHarnessRuntime,
     releases: [...releases],
     latestCalls: [],
     installed: [],
     healthChecked: [],
+    stages: [],
     failInstall: new Set<string>(),
     failHealth: new Set<string>(),
     wrongVersion: new Set<string>(),
     processes: [],
+    holdsInstall: false,
+    releaseInstall: () => { releaseHeldInstall?.() },
+    holdsRelease: false,
+    releaseLookup: () => { releaseHeldLookup?.() },
+    cancelOnStagingRecord: false,
+    holdsHealth: false,
+    releaseHealth: () => { releaseHeldHealth?.() },
+    installSignals: [],
+    releaseSignals: [],
   }
   state.runtime = createManagedHarnessRuntime({
     root,
@@ -106,8 +141,18 @@ async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: str
     cwd: '/Users/tester',
     electronRunAsNode: true,
     releaseSource: {
-      async latest() {
+      async latest(signal) {
         state.latestCalls.push(1)
+        state.releaseSignals.push(signal)
+        if (state.holdsRelease) {
+          await new Promise<void>((resolve) => {
+            const finish = (): void => { resolve() }
+            releaseHeldLookup = finish
+            signal?.addEventListener('abort', finish, { once: true })
+          })
+          releaseHeldLookup = undefined
+        }
+        if (signal?.aborted === true) throw new Error('The operation was aborted')
         const version = state.releases[state.releases.length - 1]
         if (version === undefined) throw new Error('registry publishes no latest release tag')
         return { version, integrity: `sha512-${version}` }
@@ -116,6 +161,19 @@ async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: str
     installer: {
       async install(request) {
         state.installed.push(request.version)
+        state.installSignals.push(request.signal)
+        if (state.holdsInstall) {
+          await new Promise<void>((resolve) => {
+            const finish = (): void => { resolve() }
+            releaseHeldInstall = finish
+            request.signal?.addEventListener('abort', finish, { once: true })
+          })
+          releaseHeldInstall = undefined
+        }
+        // The real runner reports an abandoned child as one a signal ended.
+        if (request.signal?.aborted === true) {
+          return { exitCode: null, signal: 'SIGTERM', output: '' }
+        }
         if (state.failInstall.has(request.version)) return { exitCode: 1, signal: null, output: 'EBADENGINE' }
         await materializeHarness(request.directory, state.wrongVersion.has(request.version) ? '9.9.9' : request.version)
         return { exitCode: 0, signal: null, output: '' }
@@ -124,12 +182,26 @@ async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: str
     healthCheck: {
       async check(request) {
         state.healthChecked.push(request.version)
+        if (state.holdsHealth) {
+          await new Promise<void>((resolve) => {
+            releaseHeldHealth = resolve
+          })
+          releaseHeldHealth = undefined
+        }
         return state.failHealth.has(request.version)
           ? { healthy: false, failure: 'readiness timed out' }
           : { healthy: true }
       },
     },
-    diagnostics: { record: async () => undefined },
+    onTransactionStage: (progress) => { state.stages.push(progress) },
+    diagnostics: {
+      async record(entry) {
+        if (state.cancelOnStagingRecord && entry.phase === 'staging') {
+          state.cancelOnStagingRecord = false
+          state.runtime.cancelTransaction()
+        }
+      },
+    },
     runProcess: async (request) => {
       state.processes.push({ command: request.command, args: request.args })
       if (request.command === 'pgrep') return { exitCode: 1, signal: null, output: '' }
@@ -880,6 +952,155 @@ describe('managed runtime final safety regressions', () => {
   }, 10_000)
 })
 
+
+describe('managed Harness transaction stages and cancellation', () => {
+  /** Install one release, then point the registry at a newer one. */
+  async function installedThenNewer(context: HarnessFixtures, newer: string): Promise<void> {
+    await context.runtime.recover()
+    await context.runtime.install()
+    context.stages.length = 0
+    context.installSignals.length = 0
+    context.releaseSignals.length = 0
+    context.releases.push(newer)
+  }
+
+  it('reports each step a staging transaction really takes, with its own safety', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await installedThenNewer(context, '0.1.6')
+
+    await expect(context.runtime.update()).resolves.toEqual({ outcome: 'promoted', version: '0.1.6' })
+
+    expect(context.stages).toEqual([
+      { stage: 'preparing', cancellable: true },
+      { stage: 'installing', cancellable: true },
+      { stage: 'verifying', cancellable: false },
+      { stage: 'health', cancellable: false },
+    ])
+  })
+
+  it('reports no stage for an update check, which installs nothing', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await context.runtime.recover()
+
+    await context.runtime.checkForUpdate()
+
+    expect(context.stages).toEqual([])
+  })
+
+  it('answers idle when no staging transaction is running', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await context.runtime.recover()
+
+    expect(context.runtime.cancelTransaction()).toBe('idle')
+  })
+
+  it('holds a transaction busy across the registry round trip, so it cannot start twice', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await installedThenNewer(context, '0.1.6')
+    context.holdsRelease = true
+
+    const update = context.runtime.update()
+    await vi.waitFor(() => {
+      expect(context.releaseSignals).toHaveLength(1)
+    })
+
+    expect(context.runtime.status()).toMatchObject({ phase: 'busy', operation: 'update', current: '0.1.5-rc.1' })
+    context.releaseLookup()
+    await expect(update).resolves.toEqual({ outcome: 'promoted', version: '0.1.6' })
+  })
+
+  it('cancels while preparing, before any package manager starts', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await installedThenNewer(context, '0.1.6')
+    context.holdsRelease = true
+
+    const update = context.runtime.update()
+    await vi.waitFor(() => {
+      expect(context.releaseSignals).toHaveLength(1)
+    })
+    expect(context.runtime.cancelTransaction()).toBe('accepted')
+    expect(context.releaseSignals[0]?.aborted).toBe(true)
+
+    await expect(update).resolves.toEqual({ outcome: 'cancelled' })
+    expect(context.installed).toEqual(['0.1.5-rc.1'])
+    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
+    expect(context.runtime.status()).toMatchObject({ phase: 'ready', current: '0.1.5-rc.1' })
+  })
+
+  it('stops before the package manager when a cancel lands during staging prep', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    const layout = managedHarnessLayout(root)
+    await installedThenNewer(context, '0.1.6')
+    context.cancelOnStagingRecord = true
+
+    await expect(context.runtime.update()).resolves.toEqual({ outcome: 'cancelled' })
+
+    // The checkpoint is the point: no child was started in order to be killed.
+    expect(context.installed).toEqual(['0.1.5-rc.1'])
+    expect(context.stages.map(progress => progress.stage)).toEqual(['preparing'])
+    expect(context.healthChecked).toEqual(['0.1.5-rc.1'])
+    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
+    await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1'])
+    await expect(stagedVersions()).resolves.toEqual([])
+    expect(parseManagedHarnessState(await readFile(layout.stateFile, 'utf8')))
+      .toEqual({ current: '0.1.5-rc.1' })
+  })
+
+  it('abandons a running package manager on cancel and discards only its staging', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    const layout = managedHarnessLayout(root)
+    await installedThenNewer(context, '0.1.6')
+    context.holdsInstall = true
+
+    const update = context.runtime.update()
+    await vi.waitFor(() => {
+      expect(context.installed).toHaveLength(2)
+    })
+    expect(context.runtime.cancelTransaction()).toBe('accepted')
+    expect(context.installSignals[0]?.aborted).toBe(true)
+
+    await expect(update).resolves.toEqual({ outcome: 'cancelled' })
+    // The candidate never reached the promotion gate, so it was never launched.
+    expect(context.healthChecked).toEqual(['0.1.5-rc.1'])
+    await expect(stagedVersions()).resolves.toEqual([])
+    await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1'])
+    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
+    await expect(readFile(layout.stateFile, 'utf8')).resolves.toContain('"current":"0.1.5-rc.1"')
+    expect(parseManagedHarnessState(await readFile(layout.stateFile, 'utf8'))).not.toHaveProperty('pending')
+  })
+
+  it('refuses to stop once the candidate is being verified or health-checked', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await installedThenNewer(context, '0.1.6')
+    context.holdsHealth = true
+
+    const update = context.runtime.update()
+    await vi.waitFor(() => {
+      expect(context.healthChecked).toHaveLength(2)
+    })
+
+    expect(context.runtime.cancelTransaction()).toBe('refused')
+    expect(context.stages.at(-1)).toEqual({ stage: 'health', cancellable: false })
+    context.releaseHealth()
+    await expect(update).resolves.toEqual({ outcome: 'promoted', version: '0.1.6' })
+  })
+
+  it('settles a cancelled transaction without recording a failure', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    await installedThenNewer(context, '0.1.6')
+    context.holdsInstall = true
+
+    const update = context.runtime.update()
+    await vi.waitFor(() => {
+      expect(context.installed).toHaveLength(2)
+    })
+    context.runtime.cancelTransaction()
+    await update
+
+    expect(context.runtime.status().phase).toBe('ready')
+    expect(context.runtime.availability()).toEqual({ available: true })
+  })
+})
 
 describe('managed process nonce validation', () => {
   it.each(['', '22222222-2222-4222-8222-222222222222'])('leaves an identical CLI with another launch identity alone: %s', async (nonce) => {

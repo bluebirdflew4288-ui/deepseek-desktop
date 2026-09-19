@@ -16,6 +16,10 @@ import { configureNativeWindowMenu } from '../../../lib/types/native-window-menu
 const FIXTURE_DIR = dirname(fileURLToPath(import.meta.url))
 const DESKTOP_DIR = resolve(FIXTURE_DIR, '../../..')
 const CHAT_PARTITION = 'persist:dsh-dual-mode-electron-fixture'
+// The audited completion family: a first answer, a regenerated answer, and a continuation.
+const CHAT_COMPLETION_PATHS = ['/api/v0/chat/completion', '/api/v0/chat/regenerate', '/api/v0/chat/continue']
+// The audited stop request, which precedes an aborted stream on the real client.
+const CHAT_STOP_PATH = '/api/v0/chat/stop_stream'
 const userDataDirectory = process.env.DSH_DESKTOP_FIXTURE_USER_DATA
 
 if (userDataDirectory === undefined) {
@@ -90,6 +94,30 @@ async function startFixtureServer(kind) {
       sidebarClicks += 1
       response.writeHead(204)
       response.end()
+      return
+    }
+    // A same-origin stand-in for the audited Chat completion stream, so a test can
+    // drive one finished assistant turn without reaching the real website.
+    if (kind === 'chat' && request.method === 'POST'
+      && new URL(request.url ?? '/', 'http://127.0.0.1').pathname === CHAT_STOP_PATH) {
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+      response.end('{"ok":true}')
+      return
+    }
+    if (kind === 'chat' && request.method === 'POST'
+      && CHAT_COMPLETION_PATHS.includes(new URL(request.url ?? '/', 'http://127.0.0.1').pathname)) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
+      let chunks = 0
+      const timer = setInterval(() => {
+        chunks += 1
+        response.write(`data: {"delta":{"content":"fixture chunk ${String(chunks)}"}}\n\n`)
+        if (chunks >= 3) {
+          clearInterval(timer)
+          response.write('data: [DONE]\n\n')
+          response.end()
+        }
+      }, 40)
+      request.on('close', () => { clearInterval(timer) })
       return
     }
     response.writeHead(200, {
@@ -230,7 +258,24 @@ function fixtureState() {
   }
 }
 
+let notificationBadge = 0
+let notificationCount = 0
+let notificationEvent
+let notificationClick
+const harnessUpdateActions = []
+const notificationAdapter = {
+  supported: () => true,
+  show: (event, click) => { notificationCount += 1; notificationEvent = event; notificationClick = click },
+  setDockBadge: count => { notificationBadge = count },
+  dispose: () => {},
+}
 globalThis.__dshDualModeFixture = {
+  notify: event => desktopApplication.receiveTaskEvent(event),
+  badge: () => notificationBadge,
+  notificationCount: () => notificationCount,
+  lastNotification: () => (notificationEvent === undefined ? undefined : { ...notificationEvent }),
+  clickNotification: () => notificationClick?.(),
+  editAccent: () => desktopApplication.editNotificationAccent(),
   fail(mode) { failureCallbacks[mode]?.() },
   async setTheme(target, preference) {
     if (target === 'system') {
@@ -243,6 +288,8 @@ globalThis.__dshDualModeFixture = {
     await control.userSetTheme(preference)
   },
   state: fixtureState,
+  showHarnessUpdate(view) { desktopApplication.publishHarnessUpdate(view) },
+  harnessUpdateActions: () => [...harnessUpdateActions],
 }
 
 function closeServers() {
@@ -266,6 +313,7 @@ async function boot() {
   ])
   const chatSession = session.fromPartition(CHAT_PARTITION)
   desktopApplication = createDesktopApplication({
+    notificationAdapter,
     stateFile: join(app.getPath('userData'), 'desktop-state.json'),
     shellPath: join(DESKTOP_DIR, 'resources/shell.html'),
     preloadPath: join(DESKTOP_DIR, 'lib/shell-preload.cjs'),
@@ -283,6 +331,7 @@ async function boot() {
     chatSession,
     ipcMain,
     openExternal: async () => {},
+    harnessUpdateAction: (action) => { harnessUpdateActions.push(action) },
     quit: releaseQuit,
     reportError: error => { console.error('dual-mode fixture error:', error) },
     systemTheme: {
@@ -303,6 +352,22 @@ async function boot() {
       options,
       CHAT_PARTITION,
     ),
+    // The fixture's own origin stands in for the audited Chat completion endpoint,
+    // so the real observer wiring is exercised without reaching the real website.
+    chatCompletionMatch: url => {
+      try {
+        return CHAT_COMPLETION_PATHS.includes(new URL(url).pathname)
+      } catch {
+        return false
+      }
+    },
+    chatCompletionStopMatch: url => {
+      try {
+        return new URL(url).pathname === CHAT_STOP_PATH
+      } catch {
+        return false
+      }
+    },
     clearChatStorage: async () => {
       await chatSession.clearStorageData()
       await chatSession.clearCache()

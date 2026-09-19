@@ -6,6 +6,7 @@ import type {
   IpcMainEvent,
   RenderProcessGoneDetails,
   WebContentsView,
+  WebContents,
   WebContentsViewConstructorOptions,
   WebContentsWillNavigateEventParams,
   WebContentsWillRedirectEventParams,
@@ -18,6 +19,8 @@ import type { HostReadiness, HostSupervisor } from './host-supervisor.ts'
 
 /** Electron and Host dependencies owned by one Harness surface. */
 export interface HarnessSurfaceOptions {
+  /** Optional Desktop-owned reader, started after cookie exchange and stopped before Host teardown. */
+  readonly observeNotifications?: (origin: string, contents: WebContents) => Promise<() => Promise<void>>
   readonly host: HostSupervisor
   readonly createView: (options: WebContentsViewConstructorOptions) => WebContentsView
   readonly ipcMain: IpcMain
@@ -60,11 +63,14 @@ function isWebUrl(raw: string): boolean {
  * @returns A surface that closes its view and joins Host shutdown on disposal.
  */
 export async function createHarnessSurface(options: HarnessSurfaceOptions): Promise<DesktopThemedSurface> {
+  let stopNotifications: (() => Promise<void>) | undefined
   let disposed = false
   let failureReported = false
+  const hasFailed = (): boolean => failureReported
   const reportFailure = (error: Error): void => {
     if (disposed || failureReported) return
     failureReported = true
+    void stopNotifications?.().catch(() => { console.error('desktop Harness notification observer could not stop') })
     try {
       options.onFailure(error)
     } catch (callbackError) {
@@ -190,6 +196,7 @@ export async function createHarnessSurface(options: HarnessSurfaceOptions): Prom
     disposePromise ??= (async () => {
       disposed = true
       stopExitSubscription()
+      await stopNotifications?.()
       for (const removeListener of listenerDisposers.splice(0)) removeListener()
       releaseApiAuth()
       options.removeView?.(view)
@@ -207,6 +214,15 @@ export async function createHarnessSurface(options: HarnessSurfaceOptions): Prom
   if (readiness.token !== undefined) rendererUrl.searchParams.set('token', readiness.token)
   try {
     await contents.loadURL(rendererUrl.href)
+    try {
+      if (!hasFailed()) {
+        stopNotifications = await options.observeNotifications?.(origin, contents)
+        if (hasFailed()) await stopNotifications?.()
+      }
+    } catch {
+      // Optional observation must not prevent the user's Harness from loading.
+      console.error('desktop Harness notification observer could not start')
+    }
   } catch (error) {
     await dispose()
     throw error

@@ -38,13 +38,21 @@ export interface HarnessInstallRequest {
   readonly directory: string
   /** Exact version to install. */
   readonly version: string
+  /**
+   * Signal abandoning the install. It is offered only because the package
+   * manager writes nothing outside `directory` and the desktop-owned npm cache:
+   * `--prefix` confines the tree, both configuration slots name empty files, and
+   * `--ignore-scripts` means no child of the package manager outlives it to write
+   * anywhere else.
+   */
+  readonly signal?: AbortSignal
 }
 
 /** Installs official Harness releases into staging directories. */
 export interface HarnessPackageInstaller {
   /**
    * Install one exact version into one directory.
-   * @param request - Target directory and version.
+   * @param request - Target directory, exact version, and optional abort signal.
    * @returns The installer's outcome. A non-zero exit code leaves the target
    * unusable; the caller discards it rather than promoting it.
    */
@@ -124,6 +132,7 @@ export function createNpmHarnessInstaller(options: NpmHarnessInstallerOptions): 
         args: harnessInstallArgs(options.npmCliEntry, options.layout, request),
         env: parentBoundEnvironment(managedProcessEnvironment({ ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_INSTALL_ROOT: options.layout.root })),
         timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
       })
     },
   }

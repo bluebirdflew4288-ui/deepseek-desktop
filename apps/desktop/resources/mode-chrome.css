@@ -6,6 +6,7 @@
   --chrome-accent: #087f71;
   --chrome-accent-soft: rgba(8, 127, 113, 0.13);
   --chrome-danger: #a63d32;
+  --notification-red: #ff3b30;
   --chrome-switch-track: rgba(32, 36, 40, 0.08);
   --chrome-switch-highlight: rgba(255, 255, 255, 0.96);
   --chrome-switch-shadow: 0 1px 3px rgba(20, 24, 28, 0.18);
@@ -261,6 +262,322 @@ dialog form {
   #mode-highlight,
   #chat-menu {
     animation: none;
+    transition: none;
+  }
+}
+
+#mode-switch button { position: relative; }
+#mode-switch button[data-unread]:not([data-unread=''])::after,
+#mode-switch button[data-attention='true']::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--notification-accent, var(--chrome-accent));
+}
+#mode-switch button[data-unread]:not([data-unread='']):not([data-attention='true'])[data-notification-kind='failed']::after { background: var(--chrome-danger); }
+#mode-switch button[data-unread]:not([data-unread='']):not([data-attention='true'])[data-notification-kind='action-required']::after { background: #b77909; }
+:root[data-theme='dark'] #mode-switch button[data-unread]:not([data-unread='']):not([data-attention='true'])[data-notification-kind='action-required']::after { background: #f3bd4f; }
+
+#mode-switch button[data-attention='true']::after {
+  background: var(--notification-red);
+  box-shadow: 0 0 0 1px var(--chrome-raised);
+}
+
+/* Harness update card. While the card is up the chrome view takes a card-sized
+   rectangle, so the card fills its surface and the rest of the window keeps the
+   pointer: an update runs for minutes over a surface the user is still using. */
+:root[data-surface='harness-update'] #chrome-controls {
+  visibility: hidden;
+}
+
+#harness-update {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 16px 12px;
+  overflow: hidden;
+  border: 1px solid var(--chrome-border);
+  /* Matched by HARNESS_UPDATE_RADIUS, which clips the native view to the same
+     corner. An outer shadow could only land in the corner wedges the clip takes
+     away, so the card keeps its edge inside itself instead. */
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--chrome-raised) 86%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  color: var(--chrome-text);
+  text-align: center;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+
+.update-traffic {
+  position: absolute;
+  top: 11px;
+  left: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.update-light {
+  display: grid;
+  width: 11px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #c9ccd1;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.14);
+  place-items: center;
+}
+
+/* Hovering the cluster previews what its two live lights do, the way macOS
+   does: both glyphs arrive together and leave together. A light that cannot act
+   keeps no glyph, so the preview never promises a blocked action. */
+.update-light::before {
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.48);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.update-light.is-close::before {
+  content: '\00d7';
+}
+
+.update-light.is-minimize::before {
+  content: '\2212';
+}
+
+.update-traffic:hover .update-light::before {
+  opacity: 1;
+}
+
+.update-traffic:hover .update-light[data-uncancellable='true']::before,
+.update-traffic:hover .update-light:disabled::before {
+  opacity: 0;
+}
+
+.update-light:hover,
+.update-light:active {
+  transform: none;
+}
+
+.update-light.is-close {
+  background: #ff5f57;
+}
+
+.update-light.is-minimize {
+  background: #febc2e;
+}
+
+.update-light[data-uncancellable='true'],
+.update-light:disabled,
+.update-light.is-unavailable {
+  background: #c9ccd1;
+}
+
+:root[data-theme='dark'] .update-light,
+:root[data-theme='dark'] .update-light:hover,
+:root[data-theme='dark'] .update-light:active {
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='dark'] .update-light[data-uncancellable='true'],
+:root[data-theme='dark'] .update-light:disabled,
+:root[data-theme='dark'] .update-light.is-unavailable {
+  background: #5a5f64;
+}
+
+/* The shipping app icon (apps/desktop/build/icon.png) reduced to a tile: a light
+   rounded square, the mark inset, and the icon's own blue. */
+.update-tile {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(233, 236, 246, 0.92));
+  box-shadow:
+    inset 0 0 0 0.5px rgba(20, 24, 28, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(20, 24, 28, 0.1);
+  place-items: center;
+}
+
+:root[data-theme='dark'] .update-tile {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(226, 230, 242, 0.82));
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.update-mark {
+  width: 37px;
+  height: auto;
+  /* The blue sampled from the shipping icon's own fill, not the card's text. */
+  color: #5b71f1;
+  transform-origin: 50% 55%;
+  animation: update-mark-life 6.5s ease-in-out infinite;
+}
+
+/* One slow breath, then five seconds of stillness. The lift and the swell peak
+   at different moments and the turn only ever goes one way, so the mark reads as
+   weighted rather than as a metronome. */
+@keyframes update-mark-life {
+  0%,
+  20%,
+  100% {
+    transform: scale(1) translateY(0) rotate(0deg);
+  }
+
+  3.6% {
+    transform: scale(1.016) translateY(-1.4px) rotate(0.2deg);
+  }
+
+  7.6% {
+    transform: scale(1.024) translateY(-1.9px) rotate(0.5deg);
+  }
+
+  11.6% {
+    transform: scale(1.012) translateY(-1.1px) rotate(0.8deg);
+  }
+
+  15.4% {
+    transform: scale(1.018) translateY(-0.6px) rotate(1.1deg);
+  }
+}
+
+/* Two lines are reserved so a longer stage line cannot move the card's content. */
+#update-stage {
+  display: grid;
+  align-content: center;
+  min-height: 40px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+#update-stage > span {
+  grid-area: 1 / 1;
+}
+
+.update-stage-in {
+  animation: stage-in 200ms ease-out both;
+}
+
+.update-stage-out {
+  animation: stage-out 200ms ease-in both;
+}
+
+@keyframes stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes stage-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+#update-dots {
+  display: flex;
+  gap: 7px;
+}
+
+#harness-update:not([data-phase='running']) #update-dots {
+  display: none;
+}
+
+#update-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chrome-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--chrome-border);
+}
+
+#harness-update[data-stage='preparing'] #update-dots i:nth-child(-n+1),
+#harness-update[data-stage='installing'] #update-dots i:nth-child(-n+2),
+#harness-update[data-stage='verifying'] #update-dots i:nth-child(-n+3),
+#harness-update[data-stage='health'] #update-dots i:nth-child(-n+4) {
+  background: var(--chrome-accent);
+  box-shadow: none;
+}
+
+#update-note {
+  display: -webkit-box;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--chrome-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* The promoted version is not the running one until the Harness restarts. */
+#update-effect {
+  margin: 0;
+  color: var(--chrome-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+#update-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#update-actions button {
+  min-height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  background: var(--chrome-raised);
+  color: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+#update-actions #update-keep {
+  border-color: transparent;
+  background: var(--chrome-accent);
+  color: #ffffff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-stage-in,
+  .update-stage-out {
+    animation: none;
+    transition: none;
+  }
+
+  .update-stage-out {
+    display: none;
+  }
+
+  .update-mark {
+    animation: none;
+  }
+
+  .update-light::before {
     transition: none;
   }
 }

@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adaptMacReleaseEnvironment, assertMacReleaseReady } from './release-preflight.ts'
+import { adaptMacReleaseEnvironment, assertMacReleaseReady, electronBuilderIdentity } from './release-preflight.ts'
 
 const RELEASE_VARIABLES = [
   'APPLE_API_ISSUER', 'APPLE_API_KEY', 'APPLE_API_KEY_ID',
@@ -50,6 +50,9 @@ export function releaseMac(): void {
   run('pnpm', [
     'exec', 'electron-builder', '--mac', 'dmg',
     '--config.forceCodeSigning=true', '--config.mac.notarize=true',
+    // The shared macOS config defaults to ad-hoc so an unsigned build still gets a
+    // correct bundle identity; a release must name its Developer ID explicitly.
+    `--config.mac.identity=${electronBuilderIdentity(result.identity)}`,
   ], desktopRoot, releaseEnvironment)
 }
 

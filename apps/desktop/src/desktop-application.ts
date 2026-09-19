@@ -14,8 +14,10 @@ import type {
 } from 'electron'
 import { CHAT_URL } from './chat-navigation.ts'
 import { clearChatPartition, createChatSurface } from './chat-surface.ts'
+import { observeChatCompletions } from './chat-completion.ts'
 import {
   desktopChromeBounds,
+  HARNESS_UPDATE_RADIUS,
   insetDesktopContentBounds,
 } from './desktop-chrome-layout.ts'
 import {
@@ -50,12 +52,20 @@ import {
   DESKTOP_TITLEBAR_HEIGHT,
   DESKTOP_SHELL_CHANNELS,
   isDesktopChromeSurface,
+  isDesktopHarnessUpdateAction,
   isDesktopShellCommand,
   type DesktopChromeSurface,
+  type DesktopHarnessUpdateAction,
+  type DesktopHarnessUpdateView,
   type DesktopShellLocalePayload,
   type DesktopShellCommand,
 } from './shell-protocol.ts'
 import { createDesktopLifecycle } from './window-lifecycle.ts'
+
+import {
+  isNotificationAccent, createDesktopNotifications, DEFAULT_NOTIFICATION_PREFERENCES,
+  type DesktopTaskEvent, type DesktopNotificationAdapter, type NotificationPreferences,
+} from './desktop-notifications.ts'
 
 const APP_NAME = 'DeepSeek Desktop'
 const WINDOW_WIDTH = 1440
@@ -63,6 +73,7 @@ const WINDOW_HEIGHT = 920
 
 /** Native factories, paths, and side effects supplied by the production entrypoint. */
 export interface DesktopApplicationOptions {
+  readonly notificationAdapter?: DesktopNotificationAdapter
   readonly stateFile: string
   readonly shellPath: string
   readonly preloadPath: string
@@ -90,9 +101,18 @@ export interface DesktopApplicationOptions {
    */
   readonly installHarness?: () => Promise<void>
   /**
+   * Act on one request the Harness update card made. The card is the chrome
+   * renderer's own surface, so its requests reach the managed Harness transaction
+   * through the composition root rather than through the mode controller.
+   * @param action - Request the user made of the card.
+   */
+  readonly harnessUpdateAction?: (action: DesktopHarnessUpdateAction) => void
+  /**
    * Attach the per-launch Host credential to a Harness surface's origin.
    * Omitted where no credential is in use, leaving the surface unauthenticated.
    */
+  /** Start an optional read-only observer after Harness authentication. */
+  readonly observeHarnessNotifications?: import('./harness-surface.ts').HarnessSurfaceOptions['observeNotifications']
   readonly attachHostApiAuth?: (origin: string) => () => void
   readonly chatSession: Session
   readonly ipcMain: IpcMain
@@ -115,6 +135,16 @@ export interface DesktopApplicationOptions {
   readonly onShellLoaded?: () => void
   readonly harnessSurfaceFactory?: (options: DesktopHarnessSurfaceFactoryOptions) => Promise<DesktopSurface>
   readonly chatSurfaceFactory?: (options: DesktopChatSurfaceFactoryOptions) => Promise<DesktopSurface>
+  /**
+   * Test seam for the Chat completion observer: decide whether one finished
+   * request is an official Chat completion. Production uses the audited endpoints.
+   */
+  readonly chatCompletionMatch?: (url: string) => boolean
+  /**
+   * Test seam for the Chat completion observer: decide whether one finished
+   * request is the client's stop request. Production uses the audited endpoint.
+   */
+  readonly chatCompletionStopMatch?: (url: string) => boolean
   readonly clearChatStorage?: () => Promise<void>
 }
 
@@ -140,6 +170,20 @@ export interface DesktopChatSurfaceFactoryOptions {
 
 /** Public lifecycle of one composed desktop application. */
 export interface DesktopApplication {
+  /** Restore the window and open the desktop-owned color picker. */
+  editNotificationAccent(): Promise<void>
+  /**
+   * Accept a provider-confirmed occurrence after startup; no renderer IPC exposes this method.
+   * @param event - Globally stable occurrence identity and minimal top-level task metadata.
+   * @returns Completion of durable unread recording and any native dispatch attempt.
+   */
+  receiveTaskEvent(event: DesktopTaskEvent): Promise<void>
+  /**
+   * Persist notification presentation choices without changing read state.
+   * @param preferences - Complete validated desktop presentation preferences.
+   * @returns Completion of persistence and chrome/menu publication.
+   */
+  setNotificationPreferences(preferences: NotificationPreferences): Promise<void>
   /** Create and reveal the local shell without waiting for Harness readiness. */
   start(): Promise<void>
   /** Restore and focus the current desktop window. */
@@ -148,6 +192,15 @@ export interface DesktopApplication {
   requestQuit(): Promise<void>
   /** Return the current detached mode snapshot when a shell is active. */
   snapshot(): DesktopModeSnapshot | undefined
+  /**
+   * Show, update, or take away the Harness update card.
+   *
+   * The latest view is remembered, so a chrome renderer that loads while a
+   * transaction is still running is given the state it missed rather than a card
+   * that says nothing about work in progress.
+   * @param view - State to render, or undefined to take the card away.
+   */
+  publishHarnessUpdate(view: DesktopHarnessUpdateView | undefined): void
   /**
    * Stop and start the Harness surface, restarting the process this desktop owns.
    * Progress arrives through the mode snapshots, not a returned promise.
@@ -189,6 +242,8 @@ function assertNever(value: never): never {
  * @returns An application whose explicit quit waits for both mode surfaces.
  */
 export function createDesktopApplication(options: DesktopApplicationOptions): DesktopApplication {
+  let notifications: ReturnType<typeof createDesktopNotifications> | undefined
+  let chatCompletionDisposer: (() => void) | undefined
   let window: BrowserWindow | undefined
   let controller: DesktopModeController | undefined
   let startPromise: Promise<void> | undefined
@@ -201,6 +256,7 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
   let chromeView: WebContentsView | undefined
   let chromeLoaded = false
   let chromeSurface: DesktopChromeSurface = 'closed'
+  let harnessUpdateView: DesktopHarnessUpdateView | undefined
   let selectedMode: DesktopMode = 'harness'
   let systemScheme = options.systemTheme.getColorScheme()
   let harnessScheme: DesktopColorScheme | undefined
@@ -229,6 +285,7 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
   }
 
   const preferencesValue = (): DesktopShellPreferences => ({
+    notifications: desktopState.notifications?.preferences ?? DEFAULT_NOTIFICATION_PREFERENCES,
     theme: desktopState.theme ?? 'system',
     locale: desktopState.locale ?? options.defaultLocale ?? 'en-US',
   })
@@ -338,6 +395,22 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     }
   }
 
+  /**
+   * Push the Harness update card's state to the chrome renderer that draws it.
+   * The card belongs to the chrome alone, so unlike the theme and the string
+   * table this reaches one renderer, and the last state is kept so a chrome that
+   * loads mid-transaction catches up.
+   */
+  const sendHarnessUpdate = (): void => {
+    const contents = chromeLoaded ? chromeView?.webContents : undefined
+    if (contents === undefined || contents.isDestroyed()) return
+    try {
+      contents.send(DESKTOP_SHELL_CHANNELS.harnessUpdate, harnessUpdateView)
+    } catch (error) {
+      reportError(error)
+    }
+  }
+
   const sendSnapshot = (snapshot: DesktopModeSnapshot): void => {
     selectedMode = snapshot.selected
     themeCoordinator?.select(selectedMode)
@@ -353,6 +426,7 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
       }
     }
     sendChromeTheme()
+    void notifications?.viewed().catch(reportError)
   }
 
   const onHarnessThemeColor = (color: string | null): void => {
@@ -439,6 +513,10 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
       surface: chromeSurface,
       content,
     }))
+    // The update card owns its rectangle, so the view's own square corners are
+    // what a user sees around it. Clipping the view to the card's radius is the
+    // only thing that lets the content page show through the four outer corners.
+    currentChrome.setBorderRadius(chromeSurface === 'harness-update' ? HARNESS_UPDATE_RADIUS : 0)
     if (chromeLoaded && !currentChrome.webContents.isDestroyed()) {
       currentChrome.webContents.send(DESKTOP_SHELL_CHANNELS.chromeLayout, {
         surface: chromeSurface,
@@ -502,6 +580,8 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
 
   const onSelectMode = (_event: IpcMainEvent, value: unknown): void => {
     if (!isDesktopMode(value)) return
+    // Restoring a mode on startup preserves attention; explicit entry clears it.
+    void notifications?.enterSource(value).catch(reportError)
     runControllerOperation(current => current.select(value))
   }
 
@@ -537,13 +617,35 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     runControllerOperation(current => performCommand(current, value))
   }
 
+  const onNotificationAccent = (event: IpcMainEvent, value: unknown): void => {
+    if (event.sender !== chromeView?.webContents || event.senderFrame !== event.sender.mainFrame || !isNotificationAccent(value)) return
+    if (notifications === undefined) return
+    void notifications.setPreferences({ ...notifications.snapshot().preferences, accent: value }).catch(reportError)
+  }
+  /**
+   * Forward one update-card request to the composition root.
+   *
+   * The card is the only surface allowed to end a Harness transaction, so its
+   * requests are accepted from the local chrome renderer's main frame alone: the
+   * Harness and Chat surfaces are remote documents and must not be able to cancel
+   * or dismiss a transaction they did not start.
+   */
+  const onHarnessUpdateAction = (event: IpcMainEvent, value: unknown): void => {
+    if (event.sender !== chromeView?.webContents || event.senderFrame !== event.sender.mainFrame) return
+    if (!isDesktopHarnessUpdateAction(value)) return
+    options.harnessUpdateAction?.(value)
+  }
+  options.ipcMain.on(DESKTOP_SHELL_CHANNELS.notificationAccent, onNotificationAccent)
   options.ipcMain.on(DESKTOP_SHELL_CHANNELS.select, onSelectMode)
   options.ipcMain.on(DESKTOP_SHELL_CHANNELS.command, onShellCommand)
   options.ipcMain.on(DESKTOP_SHELL_CHANNELS.chromeSurface, onChromeSurface)
+  options.ipcMain.on(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, onHarnessUpdateAction)
   const removeIpcListeners = (): void => {
+    options.ipcMain.off(DESKTOP_SHELL_CHANNELS.notificationAccent, onNotificationAccent)
     options.ipcMain.off(DESKTOP_SHELL_CHANNELS.select, onSelectMode)
     options.ipcMain.off(DESKTOP_SHELL_CHANNELS.command, onShellCommand)
     options.ipcMain.off(DESKTOP_SHELL_CHANNELS.chromeSurface, onChromeSurface)
+    options.ipcMain.off(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, onHarnessUpdateAction)
   }
 
   const removeWindowListeners = (): void => {
@@ -558,6 +660,9 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
   const disposeApplication = (): Promise<void> => {
     disposalPromise ??= (async () => {
       disposed = true
+      chatCompletionDisposer?.()
+      chatCompletionDisposer = undefined
+      await notifications?.dispose()
       removeIpcListeners()
       removeWindowListeners()
       const current = controller
@@ -577,6 +682,58 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     } catch (error) {
       reportError(error)
     }
+    notifications ??= createDesktopNotifications({
+      initial: desktopState.notifications ?? { preferences: DEFAULT_NOTIFICATION_PREFERENCES, events: [] },
+      visibility: () => ({
+        focused: window?.isFocused() === true,
+        visible: window?.isVisible() === true,
+        minimized: window?.isMinimized() !== false,
+        source: selectedMode,
+      }),
+      save: async (state) => {
+        const next = { ...desktopState, notifications: state }
+        desktopState = next
+        await enqueueSave(next)
+      },
+      publish: (state) => {
+        if (chromeLoaded && chromeView !== undefined && !chromeView.webContents.isDestroyed()) {
+          chromeView.webContents.send(DESKTOP_SHELL_CHANNELS.notifications, state)
+        }
+        publishPreferences()
+      },
+      adapter: options.notificationAdapter ?? { supported: () => false, show: () => {}, setDockBadge: () => {}, dispose: () => {} },
+      open: async (event) => {
+        if (window?.isMinimized()) window.restore()
+        await lifecycle.showWindow()
+        await controller?.select(event.source)
+        await notifications?.viewed()
+        // Following a notification into a source is the second explicit entry.
+        await notifications?.enterSource(event.source)
+      },
+      reportError,
+    })
+    // Chat replies are produced by the official website, so the only content-free
+    // completion signal is its completion request finishing. This is the single
+    // Chat completion detector: it is observed once per session and handed to the
+    // notification owner, which decides the source-level reminder and the native
+    // alert together, for one receipt per occurrence.
+    chatCompletionDisposer ??= observeChatCompletions({
+      session: options.chatSession,
+      ...options.chatCompletionMatch === undefined ? {} : { matches: options.chatCompletionMatch },
+      ...options.chatCompletionStopMatch === undefined ? {} : { matchesStop: options.chatCompletionStopMatch },
+      onCompletion: (observation) => {
+        void notifications?.receive({
+          id: observation.id,
+          source: 'chat',
+          kind: 'completed',
+          occurredAt: observation.occurredAt,
+          topLevel: true,
+          // Notification-only: never ordinary unread; unseen source attention contributes to the independent numeric Dock badge.
+          presentation: 'background-only',
+        }).catch(reportError)
+      },
+      reportError,
+    })
     const initialMode = desktopState.mode
     themeCoordinator = createDesktopThemeCoordinator({
       initialMode,
@@ -635,6 +792,19 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     })
     window = nativeWindow
     bindCommandW(nativeWindow.webContents)
+    const onVisibility = (): void => { void notifications?.viewed().catch(reportError) }
+    nativeWindow.on('focus', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('focus', onVisibility) })
+    nativeWindow.on('blur', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('blur', onVisibility) })
+    nativeWindow.on('show', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('show', onVisibility) })
+    nativeWindow.on('hide', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('hide', onVisibility) })
+    nativeWindow.on('minimize', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('minimize', onVisibility) })
+    nativeWindow.on('restore', onVisibility)
+    windowListenerDisposers.push(() => { nativeWindow.off('restore', onVisibility) })
 
     const onClose = (event: Event): void => { lifecycle.onWindowClose(event) }
     const onResize = (): void => {
@@ -698,9 +868,12 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
       setChromeBounds()
       await chromeView.webContents.loadFile(options.chromePath)
       chromeLoaded = true
+      notifications.publish()
       setChromeBounds()
       sendChromeTheme()
       sendShellStrings()
+      // A transaction that started before this chrome existed must still be shown.
+      sendHarnessUpdate()
     } catch (error) {
       disposeChrome()
       throw error
@@ -725,6 +898,7 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
           ? await createHarnessSurface({
             ...factoryOptions,
             host: options.createHost(),
+            ...options.observeHarnessNotifications === undefined ? {} : { observeNotifications: options.observeHarnessNotifications },
             ipcMain: options.ipcMain,
             themePreloadPath: options.harnessThemePreloadPath,
             openExternal: options.openExternal,
@@ -781,6 +955,16 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
   })
 
   return {
+    async editNotificationAccent() {
+      if (window?.isMinimized()) window.restore()
+      await lifecycle.showWindow()
+      chromeView?.webContents.send(DESKTOP_SHELL_CHANNELS.editNotificationAccent, notifications?.snapshot().preferences.accent)
+    },
+    async receiveTaskEvent(event) {
+      if (notifications === undefined) throw new Error('desktop notifications require application startup')
+      await notifications.receive(event)
+    },
+    async setNotificationPreferences(preferences) { await notifications?.setPreferences(preferences) },
     start() {
       startPromise ??= lifecycle.showWindow()
       return startPromise
@@ -792,6 +976,10 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
       return lifecycle.requestQuit()
     },
     snapshot() { return controller?.snapshot() },
+    publishHarnessUpdate(view) {
+      harnessUpdateView = view
+      sendHarnessUpdate()
+    },
     restartHarness() { runControllerOperation(current => current.restart('harness')) },
     preferences() { return preferencesValue() },
     setThemePreference(preference) {

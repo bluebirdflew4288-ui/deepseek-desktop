@@ -44,11 +44,14 @@ export interface HarnessRelease {
 export interface HarnessReleaseSource {
   /**
    * Read the release the official `latest` tag names.
+   * @param signal - Abandoning signal for the round trip. Abandoning a lookup
+   * writes nothing: the registry answer is metadata this desktop has not acted on
+   * yet, so a cancelled lookup leaves no residue to recover.
    * @returns The resolved release metadata.
-   * @throws When the registry is unreachable, answers slowly, or publishes a
-   * release tag this build cannot use as a directory name.
+   * @throws When the registry is unreachable, answers slowly, is abandoned, or
+   * publishes a release tag this build cannot use as a directory name.
    */
-  latest(): Promise<HarnessRelease>
+  latest(signal?: AbortSignal): Promise<HarnessRelease>
 }
 
 /** Dependencies one release source needs, injectable for tests. */
@@ -113,10 +116,11 @@ export function createHarnessReleaseSource(options: HarnessReleaseSourceOptions 
   const fetchImpl = options.fetchImpl ?? fetch
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   return {
-    async latest() {
+    async latest(signal) {
+      const timeout = AbortSignal.timeout(timeoutMs)
       const response = await fetchImpl(`${HARNESS_REGISTRY}${PACKUMENT_PATH}`, {
         headers: { accept: 'application/vnd.npm.install-v1+json' },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
         redirect: 'error',
       })
       if (!response.ok) {

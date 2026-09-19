@@ -12,10 +12,15 @@ import type {
 } from 'electron'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDesktopApplication } from '../src/desktop-application.ts'
+import { HARNESS_UPDATE_RADIUS } from '../src/desktop-chrome-layout.ts'
 import type { DesktopColorScheme, DesktopSystemTheme } from '../src/desktop-theme.ts'
 import { DESKTOP_THEME_CHANNELS } from '../src/desktop-theme-sync.ts'
 import type { HostReadiness, HostSupervisor } from '../src/host-supervisor.ts'
-import { DESKTOP_SHELL_CHANNELS } from '../src/shell-protocol.ts'
+import {
+  DESKTOP_SHELL_CHANNELS,
+  type DesktopHarnessUpdateAction,
+  type DesktopHarnessUpdateView,
+} from '../src/shell-protocol.ts'
 
 type Listener = (...args: unknown[]) => void
 
@@ -71,6 +76,7 @@ function fakeView() {
     webContents: contents,
     setBounds: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setBorderRadius: vi.fn(),
     setVisible: vi.fn(),
   }
   return { contents, value, view: value as unknown as WebContentsView }
@@ -108,6 +114,8 @@ class FakeWindow extends FakeEmitter {
     })
   }
 
+  isFocused(): boolean { return this.visible }
+  isMinimized(): boolean { return false }
   isVisible(): boolean { return this.visible }
   isDestroyed(): boolean { return this.destroyed }
 }
@@ -120,6 +128,8 @@ class FakeIpc extends FakeEmitter {
 
 function fakeSession(clearStorageData = vi.fn(() => Promise.resolve())): Session {
   return {
+    getUserAgent: vi.fn(() => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) DeepSeekDesktop/1.0.4 Chrome/150.0.7871.224 Electron/43.4.0 Safari/537.36'),
+    setUserAgent: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
     setPermissionRequestHandler: vi.fn(),
     clearStorageData,
@@ -257,6 +267,8 @@ describe('desktop application composition', () => {
     })
     expect(chrome.value.setBounds).toHaveBeenCalledWith(chromeBounds)
     expect(chrome.value.setBackgroundColor).toHaveBeenCalledWith('#00000000')
+    // Closed chrome is a strip, not a card, so its view keeps square corners.
+    expect(chrome.value.setBorderRadius).toHaveBeenLastCalledWith(0)
     expect(window.contentView.addChildView).toHaveBeenCalledWith(harness.view)
     expect(application.snapshot()?.harness.phase).toBe('ready')
   })
@@ -496,6 +508,7 @@ describe('the desktop preference authority', () => {
     systemTheme?: ReturnType<typeof fakeSystemTheme>
     defaultLocale?: 'zh-CN' | 'en-US'
     onPreferencesChange?: (preferences: { theme: string; locale: string }) => void
+    harnessUpdateAction?: (action: DesktopHarnessUpdateAction) => void
   }) {
     const window = new FakeWindow()
     const chrome = fakeView()
@@ -516,6 +529,7 @@ describe('the desktop preference authority', () => {
       ...options,
       ...input.defaultLocale === undefined ? {} : { defaultLocale: input.defaultLocale },
       ...input.onPreferencesChange === undefined ? {} : { onPreferencesChange: input.onPreferencesChange },
+      ...input.harnessUpdateAction === undefined ? {} : { harnessUpdateAction: input.harnessUpdateAction },
     })
     await application.start()
     await vi.waitFor(() => { expect(application.snapshot()?.harness.phase).toBe('ready') })
@@ -540,7 +554,7 @@ describe('the desktop preference authority', () => {
     expect(application.preferences().theme).toBe('dark')
     expect(await persisted(filename)).toMatchObject({ version: 2, theme: 'dark' })
     expect(harness.contents.send).toHaveBeenCalledWith(DESKTOP_THEME_CHANNELS.apply, 'dark')
-    expect(seen.at(-1)).toEqual({ theme: 'dark', locale: 'en-US' })
+    expect(seen.at(-1)).toMatchObject({ theme: 'dark', locale: 'en-US' })
 
     // The Chat surface is created lazily, so it was not connected yet: it must
     // be told the desktop preference when it does connect, rather than asked.
@@ -556,7 +570,7 @@ describe('the desktop preference authority', () => {
     application.setThemePreference('light')
     application.setLocale('zh-CN')
 
-    expect(application.preferences()).toEqual({ theme: 'light', locale: 'zh-CN' })
+    expect(application.preferences()).toMatchObject({ theme: 'light', locale: 'zh-CN' })
     expect(await persisted(filename)).toMatchObject({ version: 2, theme: 'light', locale: 'zh-CN' })
   })
 
@@ -568,7 +582,7 @@ describe('the desktop preference authority', () => {
     await persisted(filename)
 
     const second = await composed({ stateFile: filename, defaultLocale: 'en-US' })
-    expect(second.application.preferences()).toEqual({ theme: 'dark', locale: 'zh-CN' })
+    expect(second.application.preferences()).toMatchObject({ theme: 'dark', locale: 'zh-CN' })
   })
 
   it('follows a live operating-system change while the preference is system', async () => {
@@ -631,5 +645,83 @@ describe('the desktop preference authority', () => {
     // No choice made, so nothing is written: the operating system keeps deciding
     // and a later first choice is not shadowed by an early default on disk.
     expect(existsSync(filename)).toBe(false)
+  })
+
+  const UPDATE_CARD: DesktopHarnessUpdateView = {
+    phase: 'running',
+    operation: 'update',
+    stage: 'installing',
+    cancellable: true,
+    cancelling: false,
+    confirming: false,
+    collapsed: false,
+  }
+
+  it('shows the Harness update card on the chrome renderer that draws it', async () => {
+    const filename = await stateFile()
+    const { application, window, chrome } = await composed({ stateFile: filename })
+
+    application.publishHarnessUpdate(UPDATE_CARD)
+
+    expect(chrome.contents.send).toHaveBeenCalledWith(DESKTOP_SHELL_CHANNELS.harnessUpdate, UPDATE_CARD)
+    // The shell page renders no card, so it is not sent one to hold.
+    expect(window.webContents.send).not.toHaveBeenCalledWith(DESKTOP_SHELL_CHANNELS.harnessUpdate, UPDATE_CARD)
+    application.publishHarnessUpdate(undefined)
+    expect(chrome.contents.send).toHaveBeenLastCalledWith(DESKTOP_SHELL_CHANNELS.harnessUpdate, undefined)
+  })
+
+  it('clips the chrome view only while the update card holds it', async () => {
+    const filename = await stateFile()
+    const { chrome, ipc } = await composed({ stateFile: filename })
+
+    // The card fills its own rectangle, so only the native clip can take the
+    // view's square corners away and let the content page show through them.
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.chromeSurface, 'harness-update', chrome.contents)
+    expect(chrome.value.setBorderRadius).toHaveBeenLastCalledWith(HARNESS_UPDATE_RADIUS)
+
+    // The other surfaces are strips and menus, which must keep square corners.
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.chromeSurface, 'closed', chrome.contents)
+    expect(chrome.value.setBorderRadius).toHaveBeenLastCalledWith(0)
+  })
+
+  it('replays the card to a chrome that loads while its transaction is still running', async () => {
+    const filename = await stateFile()
+    const window = new FakeWindow()
+    const chrome = fakeView()
+    const harness = fakeView()
+    const chat = fakeView()
+    const { options } = applicationOptions({
+      stateFile: filename,
+      window,
+      views: [chrome.view, harness.view, chat.view],
+      host: fakeHost(() => Promise.resolve({ origin: 'http://127.0.0.1:4173' })),
+      ipc: new FakeIpc(),
+    })
+    const application = createDesktopApplication(options)
+
+    // The transaction starts before any window exists, as it can after a close.
+    application.publishHarnessUpdate(UPDATE_CARD)
+    await application.start()
+    await vi.waitFor(() => { expect(application.snapshot()?.harness.phase).toBe('ready') })
+
+    expect(chrome.contents.send).toHaveBeenCalledWith(DESKTOP_SHELL_CHANNELS.harnessUpdate, UPDATE_CARD)
+  })
+
+  it('takes an update-card request only from the chrome renderer itself', async () => {
+    const filename = await stateFile()
+    const actions: string[] = []
+    const { application, chrome, harness, ipc } = await composed({
+      stateFile: filename,
+      harnessUpdateAction: (action) => { actions.push(action) },
+    })
+
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, 'confirm-cancel', harness.contents)
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, 'dismiss')
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, 'clear-chat-data', chrome.contents)
+    expect(actions).toEqual([])
+
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.harnessUpdateAction, 'collapse', chrome.contents)
+    expect(actions).toEqual(['collapse'])
+    expect(application.snapshot()?.harness.phase).toBe('ready')
   })
 })

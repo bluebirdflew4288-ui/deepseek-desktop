@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-desktop",
   "description": "DeepSeek Desktop application with tray-owned Host lifecycle",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "type": "module",
   "main": "lib/main.js",
@@ -60,6 +60,7 @@
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "icon": "build/icon.png",
+      "identity": "-",
       "notarize": true,
       "target": [
         "dir"

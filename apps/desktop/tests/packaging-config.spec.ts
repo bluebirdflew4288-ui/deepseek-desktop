@@ -20,6 +20,7 @@ interface DesktopPackage {
     readonly mac: {
       readonly hardenedRuntime: boolean
       readonly icon: string
+      readonly identity: string
       readonly notarize: boolean
     }
     readonly win: { readonly icon: string }
@@ -155,6 +156,24 @@ describe('desktop packaging configuration', () => {
       .toContain("run('pnpm', ['run', 'materialize:electron'], desktopRoot, buildEnvironment)")
     expect(desktopPackage.build.mac.hardenedRuntime).toBe(true)
     expect(desktopPackage.build.mac.notarize).toBe(true)
+  })
+
+  it('ad-hoc signs macOS by default so the bundle identifier is the signing identifier', () => {
+    // Without an explicit identity Electron Builder skips signing entirely and the
+    // packaged app keeps the Electron stub signature (`Identifier=Electron`), which
+    // macOS rejects for notifications. Ad-hoc signing is the safe default because
+    // the signing identifier then matches CFBundleIdentifier.
+    expect(desktopPackage.build.mac.identity).toBe('-')
+  })
+
+  it('keeps a real Developer ID release from inheriting the ad-hoc default', () => {
+    const releaseScript = readFileSync(resolve(desktopRoot, 'scripts/release-mac.ts'), 'utf8')
+    // Electron Builder resolves `mac.identity` before CSC_NAME, so the release must
+    // name its Developer ID explicitly or the config default would win.
+    expect(releaseScript).toContain('electronBuilderIdentity')
+    expect(releaseScript).toContain('--config.mac.identity=')
+    expect(readFileSync(resolve(desktopRoot, 'scripts/release-preflight.ts'), 'utf8'))
+      .toContain('export function electronBuilderIdentity')
   })
 
   it('exposes generic and macOS release commands at the repository root', () => {

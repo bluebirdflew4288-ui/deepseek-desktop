@@ -6,6 +6,12 @@ import { DESKTOP_THEME_CHANNELS } from '../src/desktop-theme-sync.ts'
 
 type Listener = (...args: unknown[]) => void
 
+// Electron's default user agent for a packaged desktop app, and the browser user
+// agent the Chat partition must present instead: the official site answers the
+// product token with HTTP 429 even though the platform and Chromium versions match.
+const ELECTRON_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) DeepSeekDesktop/1.0.4 Chrome/150.0.7871.224 Electron/43.4.0 Safari/537.36'
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.224 Safari/537.36'
+
 class FakeEmitter {
   readonly listeners = new Map<string, Set<Listener>>()
 
@@ -80,10 +86,12 @@ function fakeWindow(contents = new FakeWebContents()) {
   }
 }
 
-function fakeSession(order: string[] = []) {
+function fakeSession(order: string[] = [], userAgent = ELECTRON_USER_AGENT) {
   let checkHandler: unknown
   let requestHandler: unknown
   const value = {
+    getUserAgent: vi.fn(() => userAgent),
+    setUserAgent: vi.fn(),
     setPermissionCheckHandler: vi.fn((handler: unknown) => { checkHandler = handler; order.push(handler === null ? 'permissions-reset' : 'permissions') }),
     setPermissionRequestHandler: vi.fn((handler: unknown) => { requestHandler = handler }),
     clearStorageData: vi.fn(async () => { order.push('storage') }),
@@ -167,6 +175,22 @@ describe('Chat surface', () => {
     await surface.dispose()
     expect(value.setPermissionCheckHandler).toHaveBeenLastCalledWith(null)
     expect(value.setPermissionRequestHandler).toHaveBeenLastCalledWith(null)
+  })
+
+  it('presents a browser user agent so the official site accepts the Chat load', async () => {
+    const { session, value } = fakeSession()
+    const { view } = fakeView()
+    await createChatSurface({
+      ...themeOptions(),
+      createView: () => view,
+      chatSession: session,
+      openExternal: vi.fn(() => Promise.resolve()),
+      createAuthWindow: vi.fn(),
+      onExternalNavigation: vi.fn(),
+      onFailure: vi.fn(),
+    })
+    expect(value.setUserAgent).toHaveBeenCalledTimes(1)
+    expect(value.setUserAgent).toHaveBeenCalledWith(BROWSER_USER_AGENT)
   })
 
   it('applies one decision table to top-level navigation, redirects, and new windows', async () => {

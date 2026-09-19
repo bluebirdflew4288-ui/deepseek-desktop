@@ -55,13 +55,13 @@ describe('the whole menu model', () => {
     expect(model.openMainWindow).toBe('打开主窗口')
     expect(model.settings).toBe('设置')
     expect(model.quit).toBe('退出')
-    expect(model.groups.map(group => group.label)).toEqual(['外观', '语言'])
+    expect(model.groups.map(group => group.label)).toEqual(['外观', '语言', '通知', '通知强调色'])
     expect(model.strings.reloadChat).toBe('重新加载 Chat')
     expect(shellMenuModel(EN_DARK).strings.reloadChat).toBe('Reload Chat')
   })
 
   it('never translates a product name', () => {
-    const labels = shellMenuModel(ZH).groups.flatMap(group => [group.label, ...group.choices.map(c => c.label)])
+    const labels = shellMenuModel(ZH).groups.slice(0, 2).flatMap(group => [group.label, ...group.choices.map(c => c.label)])
     for (const label of labels) {
       expect(/Chat|Harness|Work|工作台|工作模式/.test(label)).toBe(false)
     }

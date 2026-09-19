@@ -1,6 +1,8 @@
 /** Production Electron entrypoint for the dual-mode desktop application. */
 
+import { createNativeNotifications } from './native-notifications.ts'
 import { randomBytes } from 'node:crypto'
+import { observeHarnessNotifications } from './harness-notification-runtime.ts'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +31,7 @@ import {
   createDesktopApplication,
   type DesktopApplication,
 } from './desktop-application.ts'
+import { createHarnessUpdateView, type HarnessUpdateView } from './harness-update-view.ts'
 import { createHostSupervisor, spawnDshWeb } from './host-supervisor.ts'
 import { createHarnessHealthCheck } from './managed-harness-health.ts'
 import { createNpmHarnessInstaller } from './managed-harness-installer.ts'
@@ -43,6 +46,7 @@ import {
 } from './managed-harness.ts'
 import { configureNativeWindowMenu } from './native-window-menu.ts'
 import { resolveShellLocale, shellStrings, type DesktopShellLocale, type DesktopShellStrings } from './shell-locale.ts'
+import type { DesktopHarnessUpdateOperation } from './shell-protocol.ts'
 import {
   shellMenuModel,
   type DesktopShellPreferences,
@@ -106,6 +110,7 @@ function createManagedHarness(): ManagedHarnessRuntime | undefined {
       npmCliEntry: join(process.resourcesPath, 'npm', 'bin', 'npm-cli.js'),
     }),
     healthCheck: createHarnessHealthCheck({ layout, nodeExecutable, cwd, electronRunAsNode: true }),
+    onTransactionStage: (progress) => { harnessUpdate.report(progress) },
   })
 }
 
@@ -340,27 +345,78 @@ function runMemoryAction(action: 'manage' | 'export' | 'import'): void {
 }
 
 /**
+ * Transaction the update card can retry, from the operation it named.
+ * @param runtime - managed Harness runtime the card's transaction belongs to.
+ * @param operation - Transaction the card is reporting on.
+ * @returns the started transaction, which the card settles against.
+ */
+function startHarnessTransaction(
+  runtime: ManagedHarnessRuntime,
+  operation: DesktopHarnessUpdateOperation,
+): Promise<ManagedHarnessTransaction> {
+  if (operation === 'install') return runtime.install()
+  if (operation === 'reinstall') return runtime.reinstall()
+  return runtime.update()
+}
+
+/**
+ * The card the shell shows while a staging Harness transaction runs.
+ *
+ * It is the only place the desktop reports what an update is doing, so it opens
+ * before the first step and settles with the transaction, whatever the outcome.
+ */
+const harnessUpdate: HarnessUpdateView = createHarnessUpdateView({
+  publish: (view) => { desktopApplication?.publishHarnessUpdate(view) },
+  cancel: () => managedHarness?.cancelTransaction() ?? 'idle',
+  retry: (operation) => {
+    const runtime = managedHarness
+    if (runtime === undefined) return
+    runHarnessTransaction(current => startHarnessTransaction(current, operation), operation)
+  },
+  openDiagnostics: () => {
+    void shell.openPath(managedHarnessLayout(managedHarnessRoot()).logFile)
+  },
+  restart: () => { desktopApplication?.restartHarness() },
+})
+
+/**
  * Run one managed Harness transaction, then re-render the menus around its result.
  *
  * A promoted version only takes effect once the running Harness is stopped and
- * started again, because the live process still serves the outgoing version.
- * @param run - the transaction the menu action selected.
+ * started again, because the live process still serves the outgoing version. The
+ * card that reported the promotion asks the user before that restart; a
+ * transaction the card does not cover, which is a rollback, restarts on its own.
+ * @param start - the transaction the menu action or a card retry selected.
+ * @param card - transaction the update card reports on, absent for a rollback.
  */
-function runHarnessTransaction(run: () => Promise<ManagedHarnessTransaction> | undefined): void {
+function runHarnessTransaction(
+  start: (runtime: ManagedHarnessRuntime) => Promise<ManagedHarnessTransaction>,
+  card?: DesktopHarnessUpdateOperation,
+): void {
   void (async () => {
     const strings = shellStrings(currentPreferences().locale)
+    const runtime = managedHarness
+    if (runtime === undefined) return
+    if (card !== undefined && !harnessUpdate.begin(card, runtime.retained().current)) return
+    applyShellMenus()
     let transaction: ManagedHarnessTransaction | undefined
+    let failure: string | undefined
     try {
-      transaction = await run()
+      transaction = await start(runtime)
     } catch (error) {
       console.error('managed Harness transaction failed:', error)
+      failure = error instanceof Error ? error.message : String(error)
     }
+    if (card !== undefined) harnessUpdate.settle(transaction, failure, runtime.retained())
     applyShellMenus()
     if (transaction === undefined) return
     if (transaction.outcome === 'promoted' || transaction.outcome === 'rolled-back') {
-      desktopApplication?.restartHarness()
+      if (card === undefined) desktopApplication?.restartHarness()
       return
     }
+    // The card already carries a failure or a cancellation with what the user can
+    // still do about it; only an unchanged Harness is reported by dialog.
+    if (card !== undefined && transaction.outcome !== 'up-to-date') return
     await dialog.showMessageBox({
       type: transaction.outcome === 'failed' ? 'error' : 'info',
       title: `${APP_NAME}: ${strings.harnessResultTitle}`,
@@ -433,7 +489,7 @@ function harnessMenuTemplate(strings: DesktopShellStrings): MenuItemConstructorO
   const runtime = managedHarness
   const retained = runtime?.retained()
   const status = runtime?.status()
-  const idle = runtime !== undefined && status?.phase !== 'busy'
+  const idle = runtime !== undefined && status?.phase !== 'busy' && !harnessUpdate.running()
   return [
     { label: `${strings.harnessVersionPrefix}${retained?.current ?? '—'}`, enabled: false },
     { label: harnessStatusLine(status, strings), enabled: false },
@@ -441,7 +497,7 @@ function harnessMenuTemplate(strings: DesktopShellStrings): MenuItemConstructorO
     {
       label: strings.harnessInstall,
       enabled: idle,
-      click: () => { runHarnessTransaction(() => runtime?.install()) },
+      click: () => { runHarnessTransaction(current => current.install(), 'install') },
     },
     {
       label: strings.harnessCheckForUpdate,
@@ -451,7 +507,7 @@ function harnessMenuTemplate(strings: DesktopShellStrings): MenuItemConstructorO
     {
       label: strings.harnessUpdate,
       enabled: idle,
-      click: () => { runHarnessTransaction(() => runtime?.update()) },
+      click: () => { runHarnessTransaction(current => current.update(), 'update') },
     },
     { label: strings.harnessRestart, click: () => { desktopApplication?.restartHarness() } },
     { type: 'separator' },
@@ -461,12 +517,12 @@ function harnessMenuTemplate(strings: DesktopShellStrings): MenuItemConstructorO
         {
           label: strings.harnessRollback,
           enabled: idle && retained?.previous !== undefined,
-          click: () => { runHarnessTransaction(() => runtime?.rollback()) },
+          click: () => { runHarnessTransaction(current => current.rollback()) },
         },
         {
           label: strings.harnessReinstall,
           enabled: idle,
-          click: () => { runHarnessTransaction(() => runtime?.reinstall()) },
+          click: () => { runHarnessTransaction(current => current.reinstall(), 'reinstall') },
         },
         {
           label: strings.harnessOpenLog,
@@ -486,7 +542,9 @@ function harnessMenuTemplate(strings: DesktopShellStrings): MenuItemConstructorO
  */
 function runShellAction(action: ShellSettingsAction): void {
   if (action.kind === 'theme') desktopApplication?.setThemePreference(action.preference)
-  else desktopApplication?.setLocale(action.locale)
+  else if (action.kind === 'locale') desktopApplication?.setLocale(action.locale)
+  else if (action.kind === 'custom-notification-accent') void desktopApplication?.editNotificationAccent()
+  else void desktopApplication?.setNotificationPreferences(action.preferences).catch((error: unknown) => { console.error('desktop notification preference failed:', error) })
 }
 
 /**
@@ -499,7 +557,7 @@ function settingsSubmenu(group: ShellSettingsGroup): MenuItemConstructorOptions 
     label: group.label,
     submenu: group.choices.map((choice): MenuItemConstructorOptions => ({
       label: choice.label,
-      type: 'radio',
+      type: group.type ?? 'radio',
       checked: choice.checked,
       click: () => { runShellAction(choice.action) },
     })),
@@ -696,6 +754,19 @@ async function boot(): Promise<void> {
       })
     },
     harnessSetupRequired: () => harnessLaunch() === undefined,
+    observeHarnessNotifications: async (origin, contents) => {
+      const launch = managedHarness?.launch()
+      if (process.platform !== 'darwin' || launch === undefined) return async () => {}
+      return observeHarnessNotifications({
+        cliEntry: launch.cliEntry, origin,
+        fetch: (input, init) => contents.session.fetch(input instanceof URL ? input.href : input, init),
+        receive: async (event) => {
+          if (desktopApplication === undefined) throw new Error('Desktop notification receiver is unavailable')
+          await desktopApplication.receiveTaskEvent(event)
+        },
+        reportError: () => { console.error('desktop Harness background notification observation unavailable') },
+      })
+    },
     installHarness: async () => {
       const strings = shellStrings(currentPreferences().locale)
       const transaction = await managedHarness?.install().catch((error: unknown) => {
@@ -711,6 +782,8 @@ async function boot(): Promise<void> {
         })
       }
     },
+    notificationAdapter: createNativeNotifications(() => currentPreferences().locale, (error) => { console.error('desktop notification failed:', error) }),
+    harnessUpdateAction: (action) => { harnessUpdate.act(action) },
     attachHostApiAuth,
     defaultLocale: fallbackShellLocale(),
     onPreferencesChange: () => { applyShellMenus() },

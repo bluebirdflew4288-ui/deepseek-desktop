@@ -228,3 +228,20 @@ describe('Harness surface', () => {
     expect(onFailure).toHaveBeenCalledOnce()
   })
 })
+
+
+it('joins the optional notification observer before shutting down the Host', async () => {
+  const { host } = fakeHost()
+  const { view } = fakeView()
+  const order: string[] = []
+  const stop = vi.fn(async () => { order.push('observer') })
+  vi.spyOn(host, 'shutdown').mockImplementation(async () => { order.push('host') })
+  const surface = await createHarnessSurface({
+    ...themeOptions(), host, createView: () => view, openExternal: async () => {},
+    onFailure: vi.fn(), onThemeColor: vi.fn(), platform: 'darwin',
+    observeNotifications: async () => stop,
+  })
+  await surface.dispose()
+  expect(order).toEqual(['observer', 'host'])
+  expect(stop).toHaveBeenCalledOnce()
+})

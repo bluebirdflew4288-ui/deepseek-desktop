@@ -32,6 +32,26 @@ const CHAT_WEB_PREFERENCES: Readonly<WebPreferences> = {
   webSecurity: true,
 }
 
+/**
+ * Electron's default user agent carries the desktop product token, and the official
+ * Chat site answers that token with HTTP 429 ("Rate Limit Reached"). The Chat
+ * partition therefore presents the same platform and Chromium versions without the
+ * product and Electron tokens, which is the user agent the embedded site accepts
+ * from an ordinary browser.
+ */
+const CHAT_USER_AGENT_PATTERN =
+  /^(Mozilla\/5\.0 \([^)]*\) AppleWebKit\/\S+ \(KHTML, like Gecko\) )\S+\/\S+ (Chrome\/\S+) Electron\/\S+ (Safari\/\S+)$/
+
+/**
+ * Remove the desktop product and Electron tokens from Electron's default user agent.
+ * @param defaultUserAgent - The user agent Electron reports for the Chat session.
+ * @returns A browser user agent, or the input when it has an unexpected shape.
+ */
+function chatUserAgent(defaultUserAgent: string): string {
+  const [, prefix = '', chrome = '', safari = ''] = CHAT_USER_AGENT_PATTERN.exec(defaultUserAgent) ?? []
+  return prefix === '' ? defaultUserAgent : `${prefix}${chrome} ${safari}`
+}
+
 /** Electron factories and callbacks owned by one Chat surface. */
 export interface ChatSurfaceOptions {
   readonly createView: (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -117,6 +137,10 @@ export async function createChatSurface(options: ChatSurfaceOptions): Promise<De
     options.chatSession.setPermissionCheckHandler(null)
     options.chatSession.setPermissionRequestHandler(null)
   }
+
+  // The official Chat site rejects Electron's product token, so every renderer this
+  // dedicated partition owns loads the site as a browser rather than as an app.
+  options.chatSession.setUserAgent(chatUserAgent(options.chatSession.getUserAgent()))
 
   const attachPolicy = (contents: WebContents): (() => void) => {
     const onNavigate = (event: Event<WebContentsWillNavigateEventParams>): void => {

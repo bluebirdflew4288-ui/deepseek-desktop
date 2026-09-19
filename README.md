@@ -25,6 +25,7 @@ Current macOS Apple Silicon build. The `*-mode-home.png` files under `assets/scr
 - Local Chat Memory and a Memory Manager for search, add, edit, delete, pin, and JSON import/export.
 - Official DeepSeek Harness WebUI, without a fork of its published frontend.
 - Managed Harness installation, launch, health checks, and manual update checks.
+- Desktop notifications for Chat and Harness results, and an update card that reports the real stages of a Harness transaction.
 - Current and previous program versions, rollback, interrupted-operation recovery, and process ownership checks.
 - Packaged runtime capability that does not require users to preinstall Node.js or npm.
 
@@ -62,7 +63,9 @@ On a packaged first run, select Harness and choose **Install Harness**. Desktop 
 
 Use the **Harness** menu to check for updates and explicitly install the official `latest`. Prerelease tags such as `next` are not substituted for `latest`. An update becomes current only after health checks; failures preserve the current version. Desktop retains current and previous program versions. **Advanced → Roll Back** requires a retained previous version that passes health checks.
 
-Recovery handles interrupted program transactions. Rollback changes the Harness program version, not user data, and is not a backup or a promise that every upstream data format is backward-compatible. Back up valuable Harness data before changing versions.
+Installing, updating, or reinstalling shows a card in the window while the transaction runs. It reports the stage the runtime actually reached — preparing, installing, verifying, or the candidate health check — and shows no inferred percentage, while Chat and Harness stay usable underneath it. Cancel is offered while the transaction has written nothing outside its staging directory, and is refused once the candidate is being promoted; a refused control stays clickable and says why. A completed card names an outgoing version only when the version in use actually moved, so a reinstall of the version already running is not shown as an upgrade, and it states that the promoted version applies once the Harness restarts.
+
+Recovery handles interrupted program transactions. Harness rollback currently restores the selected Harness binary/version only; it does not roll back or restore local Harness-managed data under `~/.dsh`. If a newer Harness version migrates or changes the local data format, an older Harness version may not be able to read that state after rollback. Until the upstream schema and migration behavior are verified, DeepSeek Desktop does not guarantee cross-version data compatibility after rollback. Rollback is not a backup; back up valuable Harness data before changing versions.
 
 ## Installation
 

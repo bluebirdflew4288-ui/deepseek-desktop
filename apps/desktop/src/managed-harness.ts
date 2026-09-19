@@ -103,11 +103,49 @@ export type ManagedHarnessUpdateCheck =
   | { readonly state: 'not-installed'; readonly latest: string }
   | { readonly state: 'failed'; readonly reason: string }
 
+/**
+ * Observable stage of a transaction that stages a candidate. Each value names
+ * one real step: `preparing` reads the registry and marks the transaction
+ * durable, `installing` runs the package manager, `verifying` proves the staged
+ * tree is the release it asked for, and `health` launches it. The package
+ * manager resolves, downloads, and writes in one child process that reports
+ * nothing structured, so downloading is not a stage of its own.
+ */
+export type ManagedHarnessTransactionStage = 'preparing' | 'installing' | 'verifying' | 'health'
+
+/**
+ * One stage a staging transaction reached, as the shell reports it.
+ *
+ * `cancellable` is the runtime's own verdict at that stage rather than something
+ * a view infers, so the control that would cancel never claims a safety the
+ * transaction does not provide.
+ */
+export interface ManagedHarnessTransactionProgress {
+  /** Stage the transaction entered. */
+  readonly stage: ManagedHarnessTransactionStage
+  /** Whether stopping now leaves no work half-done. */
+  readonly cancellable: boolean
+}
+
+/** What a cancel request against the running staging transaction did. */
+export type ManagedHarnessCancellation = 'accepted' | 'refused' | 'idle'
+
+/** Live progress of the staging transaction, shared with cancel requests. */
+interface StagingTransaction {
+  /** Whether stopping at the stage reached leaves no work half-done. */
+  cancellable: boolean
+  /** Whether the shell has asked this transaction to stop. */
+  cancelRequested: boolean
+  /** Controller abandoning the registry round trip and the package manager. */
+  readonly abort: AbortController
+}
+
 /** What one transaction produced. */
 export type ManagedHarnessTransaction =
   | { readonly outcome: 'promoted'; readonly version: string }
   | { readonly outcome: 'up-to-date'; readonly version: string }
   | { readonly outcome: 'rolled-back'; readonly version: string }
+  | { readonly outcome: 'cancelled' }
   | { readonly outcome: 'failed'; readonly reason: string }
 
 /** Process ownership the desktop records for one launch it owns. */
@@ -165,6 +203,20 @@ export interface ManagedHarnessRuntime {
    */
   update(): Promise<ManagedHarnessTransaction>
   /**
+   * Ask the staging transaction that is running to stop.
+   *
+   * The request takes effect before the package manager starts, and while it
+   * runs, because both write only inside the transaction's staging directory and
+   * that directory is discarded on the way out. The promoted program directory
+   * is never open for writing at those stages, so stopping cannot damage the
+   * Harness in use. Once verification begins the request is refused: the
+   * candidate is already being judged against promotion, and the remaining
+   * stages are short and bounded on their own.
+   * @returns Whether the request will take effect. `idle` means no staging
+   * transaction is running.
+   */
+  cancelTransaction(): ManagedHarnessCancellation
+  /**
    * Download and promote the official `latest` release again, replacing the
    * program files even when the promoted version already matches. The retained
    * rollback target survives, and Harness user data is untouched.
@@ -216,6 +268,12 @@ export interface ManagedHarnessRuntimeOptions {
   readonly installer: HarnessPackageInstaller
   /** Health check gating promotion. */
   readonly healthCheck: HarnessHealthCheck
+  /**
+   * Observe the stage each staging transaction reaches, so the shell can show
+   * what the transaction is doing while it is doing it. Called once per stage,
+   * and never after the transaction settles.
+   */
+  readonly onTransactionStage?: (progress: ManagedHarnessTransactionProgress) => void
   /** Diagnostics sink, defaulting to the managed rotating log. */
   readonly diagnostics?: ManagedHarnessDiagnostics
   /** Process runner used by the ownership probe, injectable for tests. */
@@ -242,6 +300,52 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
   let cachedState: ManagedHarnessState = {}
   let invalid = false
   let failure: string | undefined
+
+  /**
+   * The staging transaction currently running, absent when none is. Its stage is
+   * what a cancel request is judged against, and its controller is what stops the
+   * registry round trip and the package manager.
+   */
+  let transaction: StagingTransaction | undefined
+
+  /**
+   * Report the stage a staging transaction reached.
+   * @param stage - Stage the transaction is entering.
+   * @param cancellable - Whether stopping at this stage leaves no work half-done.
+   */
+  function publishStage(stage: ManagedHarnessTransactionStage, cancellable: boolean): void {
+    const running = transaction
+    if (running === undefined) return
+    running.cancellable = cancellable
+    try {
+      options.onTransactionStage?.({ stage, cancellable })
+    } catch {
+      // A listener cannot present a stage the transaction never reached, so a
+      // failing listener costs the shell its view and nothing else.
+    }
+  }
+
+  /**
+   * Open the observable window of a staging transaction, which starts with the
+   * registry read and ends when the transaction settles.
+   * @param operation - Transaction the shell started.
+   */
+  function beginStaging(operation: ManagedHarnessOperation): void {
+    transaction = { cancellable: true, cancelRequested: false, abort: new AbortController() }
+    busy = operation
+    publishStage('preparing', true)
+  }
+
+  /** Close the observable window a staging transaction opened. */
+  function endStaging(): void {
+    transaction = undefined
+    busy = undefined
+  }
+
+  /** Whether the running staging transaction was asked to stop. */
+  function cancelRequested(): boolean {
+    return transaction?.cancelRequested === true
+  }
 
   /** Run one transaction after every previously queued one, keeping its result. */
   function enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -390,7 +494,9 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
    * @param version - Exact version to promote.
    * @param state - State before the transaction.
    * @param integrity - Registry integrity value the version was resolved with.
-   * @returns What the transaction produced.
+   * @returns What the transaction produced. A cancellation requested before the
+   * package manager is reached, or one that ends its run, discards the candidate
+   * and leaves the promoted version untouched.
    */
   async function stageAndPromote(
     operation: ManagedHarnessOperation,
@@ -402,6 +508,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
     const staging = layout.stagingDirectory(version)
     let promoted = false
     try {
+      if (cancelRequested()) return { outcome: 'cancelled' }
       await writeState({ ...state, pending: { operation, version } })
       await mkdir(layout.staging, { recursive: true, mode: 0o700 })
       await diagnostics.record({
@@ -411,7 +518,20 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
         ...(integrity === undefined ? {} : { integrity }),
       })
 
-      const installed = await options.installer.install({ directory: staging, version })
+      // A cancel that landed during the durable write above stops the transaction
+      // here, so no package manager is started whose exit the next check would
+      // have to explain away.
+      if (cancelRequested()) return { outcome: 'cancelled' }
+      publishStage('installing', true)
+      const installed = await options.installer.install({
+        directory: staging,
+        version,
+        ...(transaction === undefined ? {} : { signal: transaction.abort.signal }),
+      })
+      if (cancelRequested()) {
+        await diagnostics.record({ operation, version, phase: 'cancelled' })
+        return { outcome: 'cancelled' }
+      }
       if (installed.exitCode !== 0) {
         const reason = installed.exitCode === null
           ? `Harness ${version} was interrupted by ${String(installed.signal)}`
@@ -426,6 +546,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
         return { outcome: 'failed', reason }
       }
 
+      publishStage('verifying', false)
       try {
         await verifyHarnessInstall(staging, version, integrity)
       } catch (error) {
@@ -434,6 +555,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
         return { outcome: 'failed', reason }
       }
 
+      publishStage('health', false)
       const health = await options.healthCheck.check({ versionDirectory: staging, version })
       await diagnostics.record({
         operation,
@@ -503,7 +625,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
   /** Resolve the official release, recording a registry failure as one. */
   async function resolveRelease(operation: ManagedHarnessOperation): Promise<HarnessRelease | undefined> {
     try {
-      const release = await options.releaseSource.latest()
+      const release = await options.releaseSource.latest(transaction?.abort.signal)
       await diagnostics.record({
         operation,
         version: release.version,
@@ -512,6 +634,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
       })
       return release
     } catch (error) {
+      if (cancelRequested()) return undefined
       failure = describeFailure(error)
       await diagnostics.record({ operation, phase: 'registry', failure })
       return undefined
@@ -527,18 +650,28 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
    */
   function acquireLatest(operation: 'update' | 'reinstall', force: boolean): Promise<ManagedHarnessTransaction> {
     return enqueue(async (): Promise<ManagedHarnessTransaction> => {
-      const state = await stateForTransaction()
-      if (state === undefined) return { outcome: 'failed', reason: 'managed Harness state is unusable' }
-      const release = await resolveRelease(operation)
-      if (release === undefined) return { outcome: 'failed', reason: failure ?? 'registry lookup failed' }
-      if (!force && state.current === release.version) {
-        failure = undefined
-        retain(state)
-        return { outcome: 'up-to-date', version: release.version }
+      beginStaging(operation)
+      try {
+        const state = await stateForTransaction()
+        if (state === undefined) return { outcome: 'failed', reason: 'managed Harness state is unusable' }
+        const release = await resolveRelease(operation)
+        if (release === undefined) {
+          return cancelRequested()
+            ? { outcome: 'cancelled' }
+            : { outcome: 'failed', reason: failure ?? 'registry lookup failed' }
+        }
+        if (cancelRequested()) return { outcome: 'cancelled' }
+        if (!force && state.current === release.version) {
+          failure = undefined
+          retain(state)
+          return { outcome: 'up-to-date', version: release.version }
+        }
+        const result = await stageAndPromote(operation, release.version, state, release.integrity)
+        if (result.outcome === 'failed') failure = result.reason
+        return result
+      } finally {
+        endStaging()
       }
-      const transaction = await stageAndPromote(operation, release.version, state, release.integrity)
-      if (transaction.outcome === 'failed') failure = transaction.reason
-      return transaction
     })
   }
 
@@ -631,18 +764,28 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
 
     install() {
       return enqueue(async (): Promise<ManagedHarnessTransaction> => {
-        const state = await stateForTransaction()
-        if (state === undefined) return { outcome: 'failed', reason: 'managed Harness state is unusable' }
-        if (state.current !== undefined) {
-          failure = undefined
-          retain(state)
-          return { outcome: 'up-to-date', version: state.current }
+        beginStaging('install')
+        try {
+          const state = await stateForTransaction()
+          if (state === undefined) return { outcome: 'failed', reason: 'managed Harness state is unusable' }
+          if (state.current !== undefined) {
+            failure = undefined
+            retain(state)
+            return { outcome: 'up-to-date', version: state.current }
+          }
+          const release = await resolveRelease('install')
+          if (release === undefined) {
+            return cancelRequested()
+              ? { outcome: 'cancelled' }
+              : { outcome: 'failed', reason: failure ?? 'registry lookup failed' }
+          }
+          if (cancelRequested()) return { outcome: 'cancelled' }
+          const result = await stageAndPromote('install', release.version, state, release.integrity)
+          if (result.outcome === 'failed') failure = result.reason
+          return result
+        } finally {
+          endStaging()
         }
-        const release = await resolveRelease('install')
-        if (release === undefined) return { outcome: 'failed', reason: failure ?? 'registry lookup failed' }
-        const transaction = await stageAndPromote('install', release.version, state, release.integrity)
-        if (transaction.outcome === 'failed') failure = transaction.reason
-        return transaction
       })
     },
 
@@ -660,6 +803,15 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
 
     update() {
       return acquireLatest('update', false)
+    },
+
+    cancelTransaction() {
+      const running = transaction
+      if (running === undefined) return 'idle'
+      if (!running.cancellable) return 'refused'
+      running.cancelRequested = true
+      running.abort.abort()
+      return 'accepted'
     },
 
     reinstall() {

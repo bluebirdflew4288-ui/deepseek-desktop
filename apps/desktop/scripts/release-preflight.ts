@@ -55,7 +55,12 @@ function normalizeSigningIdentity(value: string): string {
   return value.replaceAll(/\\([ ()])/g, '$1')
 }
 
-function electronBuilderIdentity(identity: string): string {
+/**
+ * Strip the certificate-type prefix Electron Builder rejects in a configured name.
+ * @param identity - Full Keychain identity name, prefix included.
+ * @returns The bare certificate name Electron Builder accepts.
+ */
+export function electronBuilderIdentity(identity: string): string {
   return identity.slice(DEVELOPER_ID_PREFIX.length).trim()
 }
 

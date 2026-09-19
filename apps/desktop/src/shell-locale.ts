@@ -130,6 +130,8 @@ export interface DesktopShellStrings {
   readonly modeSwitchLabel: string
   /** Accessible name of the Chat actions button and its menu. */
   readonly chatActionsLabel: string
+  /** Accessible suffix naming an unseen Harness result on the Harness entry. */
+  readonly harnessUnseenResults: string
   /** Chrome menu item reloading the embedded Chat. */
   readonly reloadChat: string
   /** Chrome menu item clearing the Chat partition. */
@@ -200,6 +202,44 @@ export interface DesktopShellStrings {
   readonly harnessUpToDate: string
   /** Dialog prefix the desktop joins with the newest official version. */
   readonly harnessUpdateAvailablePrefix: string
+  /** Update card line while the transaction reads the registry and stages. */
+  readonly harnessUpdatePreparing: string
+  /** Update card line while the package manager fetches and writes the release. */
+  readonly harnessUpdateInstalling: string
+  /** Update card line while the staged tree is checked against the resolved release. */
+  readonly harnessUpdateVerifying: string
+  /** Update card line while the staged release is launched to prove it runs. */
+  readonly harnessUpdateHealth: string
+  /** Update card line once the runtime has accepted a cancel request. */
+  readonly harnessUpdateCancelling: string
+  /** Update card footer asking the user to keep the application open. */
+  readonly harnessUpdateKeepOpen: string
+  /** Update card answer when cancelling would interrupt an uninterruptible step. */
+  readonly harnessUpdateCannotCancel: string
+  /** Update card question asking whether to stop a cancellable transaction. */
+  readonly harnessUpdateCancelQuestion: string
+  /** Update card button closing the cancel question and resuming the wait. */
+  readonly harnessUpdateKeepGoing: string
+  /** Accessible name of the update card control that takes the card away. */
+  readonly harnessUpdateClose: string
+  /** Accessible name of the update card control that hides the card but runs on. */
+  readonly harnessUpdateCollapse: string
+  /** Update card title once an update promoted a version the live Harness is not yet serving. */
+  readonly harnessUpdateCompleted: string
+  /** Update card title once a first install promoted a version. */
+  readonly harnessInstallCompleted: string
+  /** Update card title once the version already in use was promoted again. */
+  readonly harnessReinstallCompleted: string
+  /** Update card line naming what makes a promoted version take effect. */
+  readonly harnessUpdateRestartEffect: string
+  /** Update card title after an update or reinstall failed. */
+  readonly harnessUpdateFailed: string
+  /** Update card title after a first install failed. */
+  readonly harnessInstallFailed: string
+  /** Update card title after the user cancelled an update or reinstall. */
+  readonly harnessUpdateCancelled: string
+  /** Update card title after the user cancelled a first install. */
+  readonly harnessInstallCancelled: string
 }
 
 const STRINGS: Readonly<Record<DesktopShellLocale, DesktopShellStrings>> = {
@@ -257,6 +297,7 @@ const STRINGS: Readonly<Record<DesktopShellLocale, DesktopShellStrings>> = {
     bringAllToFront: '前置全部窗口',
     modeSwitchLabel: '桌面模式',
     chatActionsLabel: 'Chat 操作',
+    harnessUnseenResults: '有新结果',
     reloadChat: '重新加载 Chat',
     clearChatData: '清除 Chat 数据',
     clearChatConfirmMessage: '清除此 DeepSeek Chat 数据将同时删除登录状态和本地 Memory。如需保留 Memory，请先导出 JSON。',
@@ -292,6 +333,25 @@ const STRINGS: Readonly<Record<DesktopShellLocale, DesktopShellStrings>> = {
     harnessResultTitle: 'Harness',
     harnessUpToDate: 'Harness 已是最新版本。',
     harnessUpdateAvailablePrefix: '发现新版本：',
+    harnessUpdatePreparing: '正在准备…',
+    harnessUpdateInstalling: '正在下载并安装 Harness…',
+    harnessUpdateVerifying: '正在校验安装…',
+    harnessUpdateHealth: '正在验证运行情况…',
+    harnessUpdateCancelling: '正在取消…',
+    harnessUpdateKeepOpen: '更新期间请勿关闭应用。',
+    harnessUpdateCannotCancel: '当前步骤无法中断，暂时无法取消。',
+    harnessUpdateCancelQuestion: '要取消 Harness 更新吗？',
+    harnessUpdateKeepGoing: '继续更新',
+    harnessUpdateClose: '关闭',
+    harnessUpdateCollapse: '收起',
+    harnessUpdateCompleted: 'Harness 更新已安装',
+    harnessInstallCompleted: 'Harness 安装完成',
+    harnessReinstallCompleted: 'Harness 重新安装完成',
+    harnessUpdateRestartEffect: '重启 Harness 后生效',
+    harnessUpdateFailed: 'Harness 更新失败',
+    harnessInstallFailed: 'Harness 安装失败',
+    harnessUpdateCancelled: 'Harness 更新已取消',
+    harnessInstallCancelled: 'Harness 安装已取消',
   },
   'en-US': {
     openMainWindow: 'Open Main Window',
@@ -347,6 +407,7 @@ const STRINGS: Readonly<Record<DesktopShellLocale, DesktopShellStrings>> = {
     bringAllToFront: 'Bring All to Front',
     modeSwitchLabel: 'Desktop mode',
     chatActionsLabel: 'Chat actions',
+    harnessUnseenResults: 'New results',
     reloadChat: 'Reload Chat',
     clearChatData: 'Clear Chat Data',
     clearChatConfirmMessage: 'Clearing this DeepSeek Chat data also deletes the login state and local Memory. Export JSON first if you want to keep Memory.',
@@ -382,6 +443,25 @@ const STRINGS: Readonly<Record<DesktopShellLocale, DesktopShellStrings>> = {
     harnessResultTitle: 'Harness',
     harnessUpToDate: 'Harness is up to date.',
     harnessUpdateAvailablePrefix: 'New version available: ',
+    harnessUpdatePreparing: 'Preparing…',
+    harnessUpdateInstalling: 'Downloading and installing Harness…',
+    harnessUpdateVerifying: 'Verifying the installation…',
+    harnessUpdateHealth: 'Checking that it runs…',
+    harnessUpdateCancelling: 'Cancelling…',
+    harnessUpdateKeepOpen: 'Keep the app open while the update runs.',
+    harnessUpdateCannotCancel: 'This step cannot be interrupted, so the update cannot be cancelled yet.',
+    harnessUpdateCancelQuestion: 'Cancel the Harness update?',
+    harnessUpdateKeepGoing: 'Keep updating',
+    harnessUpdateClose: 'Close',
+    harnessUpdateCollapse: 'Minimize',
+    harnessUpdateCompleted: 'Harness update installed',
+    harnessInstallCompleted: 'Harness installation complete',
+    harnessReinstallCompleted: 'Harness reinstalled',
+    harnessUpdateRestartEffect: 'Takes effect after restarting Harness.',
+    harnessUpdateFailed: 'Harness update failed',
+    harnessInstallFailed: 'Harness installation failed',
+    harnessUpdateCancelled: 'Harness update cancelled',
+    harnessInstallCancelled: 'Harness installation cancelled',
   },
 }
 

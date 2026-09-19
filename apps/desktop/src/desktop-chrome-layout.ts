@@ -1,7 +1,7 @@
 /** Pure platform geometry for local title-bar chrome and content insets. */
 
 import type { DesktopContentBounds, DesktopMode } from './desktop-mode.ts'
-import type { DesktopChromeSurface } from './shell-protocol.ts'
+import { DESKTOP_TITLEBAR_HEIGHT, type DesktopChromeSurface } from './shell-protocol.ts'
 
 const CHROME_TOP = 6
 const CHROME_INLINE_INSET = 12
@@ -13,6 +13,18 @@ const CHROME_CHAT_ACTION_GAP = 4
 const CHROME_CHAT_ACTION_WIDTH = 32
 const CHROME_CHAT_MENU_WIDTH = 184
 const CHROME_CHAT_MENU_HEIGHT = 132
+/** Harness update card, sized to its own content rather than to the window. */
+const HARNESS_UPDATE_WIDTH = 300
+const HARNESS_UPDATE_HEIGHT = 216
+/** The card's center sits one third down the content, not at its middle. */
+const HARNESS_UPDATE_CENTER_FRACTION = 1 / 3
+/**
+ * Corner radius the card paints, and the radius its native view must be clipped
+ * to. The card fills its rectangle, so a corner outside the card is a corner of
+ * the view: only the native clip takes the view's square edge away and lets the
+ * content page show through. Keep this in step with `#harness-update`.
+ */
+export const HARNESS_UPDATE_RADIUS = 12
 
 /** Inputs that determine one native mode-chrome rectangle. */
 export interface DesktopChromeBoundsInput {
@@ -46,12 +58,36 @@ export function desktopTitlebarDragStart(platform: NodeJS.Platform): number {
 }
 
 /**
+ * Rectangle holding the Harness update card.
+ *
+ * The card owns its own rectangle instead of expanding the chrome across the
+ * content: the chrome view takes the pointer wherever it reaches, and an update
+ * runs for minutes while the user keeps using the surface underneath it.
+ * @param content - Full BrowserWindow content bounds.
+ * @returns A card-sized rectangle in the upper third of the content.
+ */
+function harnessUpdateBounds(content: DesktopContentBounds): DesktopContentBounds {
+  const width = Math.min(HARNESS_UPDATE_WIDTH, content.width)
+  const height = Math.min(HARNESS_UPDATE_HEIGHT, content.height)
+  const centered = content.y + Math.round(content.height * HARNESS_UPDATE_CENTER_FRACTION) - Math.round(height / 2)
+  const belowTitlebar = content.y + DESKTOP_TITLEBAR_HEIGHT
+  const lowest = Math.max(belowTitlebar, content.y + content.height - height)
+  return {
+    x: content.x + Math.round((content.width - width) / 2),
+    y: Math.min(Math.max(centered, belowTitlebar), lowest),
+    width,
+    height,
+  }
+}
+
+/**
  * Resolve the native rectangle required by the current chrome surface.
  * @param input - Platform, selected mode, surface, and window bounds.
  * @returns A rectangle contained by the BrowserWindow content bounds.
  */
 export function desktopChromeBounds(input: DesktopChromeBoundsInput): DesktopContentBounds {
   if (input.surface === 'dialog') return { ...input.content }
+  if (input.surface === 'harness-update') return harnessUpdateBounds(input.content)
   const x = input.content.x + inlineInset(input.platform)
   const y = input.content.y + CHROME_TOP
   const requestedWidth = input.surface === 'chat-menu'

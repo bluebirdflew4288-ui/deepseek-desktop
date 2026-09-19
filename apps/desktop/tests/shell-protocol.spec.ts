@@ -3,6 +3,7 @@ import {
   DESKTOP_SHELL_CHANNELS,
   type DesktopChromeLayout,
   isDesktopChromeSurface,
+  isDesktopHarnessUpdateAction,
   isDesktopShellCommand,
   localePayloadLocale,
   localePayloadString,
@@ -30,11 +31,26 @@ describe('desktop shell protocol', () => {
   })
 
   it('accepts only the closed chrome surface union', () => {
-    for (const value of ['closed', 'chat-menu', 'dialog']) {
+    for (const value of ['closed', 'chat-menu', 'dialog', 'harness-update']) {
       expect(isDesktopChromeSurface(value)).toBe(true)
     }
     expect(isDesktopChromeSurface('mode-menu')).toBe(false)
     expect(isDesktopChromeSurface('full-window')).toBe(false)
+  })
+
+  it('accepts only the closed update-card action union', () => {
+    for (const value of ['cancel', 'keep', 'confirm-cancel', 'collapse', 'dismiss', 'retry', 'details', 'restart']) {
+      expect(isDesktopHarnessUpdateAction(value)).toBe(true)
+    }
+    for (const value of ['quit', 'install-harness', 'clear-chat-data', undefined, 42, {}]) {
+      expect(isDesktopHarnessUpdateAction(value)).toBe(false)
+    }
+  })
+
+  it('keeps the update card on its own two channels', () => {
+    expect(DESKTOP_SHELL_CHANNELS.harnessUpdate).toBe('dsh-desktop:harness-update')
+    expect(DESKTOP_SHELL_CHANNELS.harnessUpdateAction).toBe('dsh-desktop:harness-update-action')
+    expect(DESKTOP_SHELL_CHANNELS.harnessUpdateAction).not.toBe(DESKTOP_SHELL_CHANNELS.command)
   })
 
   it('reports the applied chrome surface in layout acknowledgements', () => {
