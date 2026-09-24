@@ -9,8 +9,9 @@
  * managed install.
  */
 
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { ensureEmptyManagedFile, ensureSafeDirectoryTree } from './managed-harness-files.ts'
 import {
   harnessCliEntry,
   harnessFrontendEntry,
@@ -29,12 +30,27 @@ import { HARNESS_PACKAGE, HARNESS_REGISTRY } from './managed-harness-registry.ts
 /** Bound on one install before the desktop abandons it. */
 const DEFAULT_INSTALL_TIMEOUT_MS = 900_000
 
-/** Root manifest an install target carries so the package manager has one root project. */
-const STAGING_MANIFEST = '{"name":"dsh-managed-harness","private":true,"version":"0.0.0"}\n'
+/**
+ * Root manifest an install target carries so the package manager has one root
+ * project and one compatible Cordis loader closure. The published rc.2 ranges
+ * otherwise mix loader 1.0.3 / Cordis 4.0.2 in the DSH subtree with loader
+ * 1.0.5 / Cordis 4.0.4 at the root. Recursive loader entries cross those
+ * implementations and fail during boot. Keep the DSH subtree's pair unified:
+ * this combination passed the synthetic Windows boot and HTTP health probe.
+ */
+const STAGING_MANIFEST = `${JSON.stringify({
+  name: 'dsh-managed-harness',
+  private: true,
+  version: '0.0.0',
+  overrides: {
+    '@deepseek-ai/cordis': '4.0.2',
+    '@deepseek-ai/cordis-plugin-loader': '1.0.3',
+  },
+})}\n`
 
 /** One release the desktop installs. */
 export interface HarnessInstallRequest {
-  /** Directory receiving the install; it is replaced wholesale. */
+  /** Fresh directory receiving the install; an existing target is rejected. */
   readonly directory: string
   /** Exact version to install. */
   readonly version: string
@@ -120,12 +136,14 @@ export function createNpmHarnessInstaller(options: NpmHarnessInstallerOptions): 
   const timeoutMs = options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS
   return {
     async install(request) {
-      await mkdir(options.layout.npmCache, { recursive: true, mode: 0o700 })
-      await mkdir(dirname(options.layout.npmUserConfig), { recursive: true, mode: 0o700 })
-      await writeFile(options.layout.npmUserConfig, '', { mode: 0o600 })
-      await writeFile(options.layout.npmGlobalConfig, '', { mode: 0o600 })
-      await rm(request.directory, { recursive: true, force: true })
-      await mkdir(request.directory, { recursive: true, mode: 0o700 })
+      const trustedAnchor = options.layout.rootAnchor ?? options.layout.rootBoundary ?? options.layout.root
+      await ensureSafeDirectoryTree(options.layout.npmCache, trustedAnchor)
+      await ensureEmptyManagedFile(options.layout.npmUserConfig, trustedAnchor)
+      await ensureEmptyManagedFile(options.layout.npmGlobalConfig, trustedAnchor)
+      // The runtime creates this directory exclusively beneath a transaction
+      // marker. Never erase a colliding path from inside the installer.
+      await ensureSafeDirectoryTree(dirname(request.directory), trustedAnchor)
+      await mkdir(request.directory, { recursive: false, mode: 0o700 })
       await writeFile(`${request.directory}/package.json`, STAGING_MANIFEST, { mode: 0o600 })
       return runProcess({
         command: options.nodeExecutable,

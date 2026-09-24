@@ -11,6 +11,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron, type ElectronApplication, type Page } from 'playwright'
 import { describe, expect, it } from 'vitest'
+import { assertFixtureImportsResolve } from './electron-fixture-artifacts.ts'
 
 interface ChatNotificationFixture {
   notificationCount(): number
@@ -23,6 +24,7 @@ const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixtureRoot = resolve(desktopRoot, 'tests/fixtures/dual-mode-app')
 
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
+  assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
   return await _electron.launch({
     args: [fixtureRoot],
     cwd: desktopRoot,

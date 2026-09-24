@@ -25,6 +25,12 @@ export interface ManagedHarnessPending {
   readonly operation: ManagedHarnessOperation
   /** Version that transaction was preparing. */
   readonly version: string
+  /** Stable identity for artifacts created by this transaction. Missing only in legacy state. */
+  readonly transactionId?: string
+  /** Last durably completed phase, used to make crash recovery ownership-aware. */
+  readonly phase?: 'prepared' | 'staging' | 'verified' | 'backup-planned' | 'backed-up' | 'promoted' | 'committed'
+  /** Identity of the existing install moved to this transaction's backup. */
+  readonly backupInstallId?: string
 }
 
 /** Retained Harness program versions and the transaction that produced them. */
@@ -33,10 +39,7 @@ export interface ManagedHarnessState {
   readonly current?: string
   /** Version kept for rollback. Absent until a second install completes. */
   readonly previous?: string
-  /**
-   * Transaction interrupted by a crash. Its version was never promoted, so
-   * recovery discards that version's staging directory and clears this field.
-   */
+  /** Transaction interrupted by a crash; recovery uses identity and phase to handle owned paths. */
   readonly pending?: ManagedHarnessPending
 }
 
@@ -67,7 +70,26 @@ function readPending(candidate: Record<string, unknown>): ManagedHarnessPending 
   if (typeof version !== 'string' || !isManagedHarnessVersionName(version)) {
     throw new Error('managed Harness state has an invalid pending version')
   }
-  return { operation: operation as ManagedHarnessOperation, version }
+  const transactionId = value.transactionId
+  if (transactionId !== undefined && (typeof transactionId !== 'string' || !/^[0-9a-f-]{36}$/u.test(transactionId))) {
+    throw new Error('managed Harness state has an invalid pending transaction id')
+  }
+  const phases = new Set(['prepared', 'staging', 'verified', 'backup-planned', 'backed-up', 'promoted', 'committed'])
+  const phase = value.phase
+  if (phase !== undefined && (typeof phase !== 'string' || !phases.has(phase))) {
+    throw new Error('managed Harness state has an invalid pending phase')
+  }
+  const backupInstallId = value.backupInstallId
+  if (backupInstallId !== undefined && (typeof backupInstallId !== 'string' || !/^[0-9a-f-]{36}$/u.test(backupInstallId))) {
+    throw new Error('managed Harness state has an invalid pending backup identity')
+  }
+  return {
+    operation: operation as ManagedHarnessOperation,
+    version,
+    ...(transactionId === undefined ? {} : { transactionId }),
+    ...(phase === undefined ? {} : { phase: phase as NonNullable<ManagedHarnessPending['phase']> }),
+    ...(backupInstallId === undefined ? {} : { backupInstallId }),
+  }
 }
 
 /**

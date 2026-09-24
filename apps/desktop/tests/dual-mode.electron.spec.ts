@@ -6,6 +6,7 @@ import { _electron, type ElectronApplication, type Page } from 'playwright'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/desktop-notifications.ts'
+import { assertFixtureImportsResolve } from './electron-fixture-artifacts.ts'
 
 interface FixtureState {
   readonly snapshot?: {
@@ -203,6 +204,7 @@ async function waitForState(
 }
 
 async function launchFixture(userDataDirectory: string): Promise<ElectronApplication> {
+  assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
   return await _electron.launch({
     args: [fixtureRoot],
     cwd: desktopRoot,

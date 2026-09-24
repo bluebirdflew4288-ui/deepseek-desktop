@@ -69,7 +69,7 @@ Harness 提供官方 WebUI 以及工作区、智能体和工具能力。请独�
 
 ## 安装
 
-人工验收覆盖 macOS Apple Silicon 开发构建。本衍生项目尚无公开稳定版本，也未完成签名与公证。仓库包含 Windows x64 打包配置，但本次验收不认证 Windows 构建。Linux Desktop 安装包不是当前发布目标。
+人工验收覆盖 macOS Apple Silicon 开发构建。本衍生项目尚无公开稳定版本。发布工作流要求可信的 Windows x64 Authenticode 证书；只有安装程序与应用可执行文件均通过证书链校验、配置的完整证书 Subject 精确匹配且带有可信 RFC 3161 时间戳时才会继续。目前没有配置 Windows 签名凭据，因此发布会安全失败。macOS 发布产物仅使用 ad hoc 签名；未使用 Developer ID 分发签名，也未公证。用户已接受未签名的 Windows x64 1.0.5 本地试用构建（含原生菜单、托盘行为与通知），但该验收仅适用于此前已安装的构建。最新源码通过了 `pnpm run build`，但两次独立打包预检都在 `resEdit` 写入时遇到 `EBUSY`，未生成新安装器或 ZIP；最新源码的安装与运行验证仍未完成。Linux Desktop 安装包不是当前发布目标。
 
 ### 打包应用用户
 
@@ -101,6 +101,7 @@ pnpm run package:desktop
 3. 打开 **Memory → 管理 Memory** 查看或添加本地记录；使用 JSON 导出进行备份。
 4. 使用 Harness 菜单手动检查更新、重启或执行符合条件的回滚。
 5. macOS 上 Command+W 隐藏窗口，重新激活应用可恢复；Command+Q 退出 Desktop 及其拥有的托管进程。
+6. Windows 上按 F10 打开应用菜单。关闭窗口或按 Alt+F4 会隐藏窗口；点击托盘图标可恢复窗口，包括从最小化状态恢复。使用托盘的“退出”命令结束应用。
 
 ## 数据、隐私与运行时隔离
 

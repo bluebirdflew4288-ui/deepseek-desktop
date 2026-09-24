@@ -8,6 +8,7 @@ interface DesktopPackage {
   readonly scripts: Readonly<Record<string, string>>
   readonly build: {
     readonly appId: string
+    readonly artifactName: string
     readonly afterPack: string
     readonly asarUnpack: readonly string[]
     readonly electronDist: string
@@ -82,6 +83,7 @@ describe('desktop packaging configuration', () => {
   it('uses the DeepSeek Desktop product identity', () => {
     expect(desktopPackage.build.appId).toBe('ai.deepseek.harness.desktop')
     expect(desktopPackage.build.productName).toBe('DeepSeek Desktop')
+    expect(desktopPackage.build.artifactName).toBe('DeepSeek-Desktop-${version}-${os}-${arch}.${ext}')
   })
 
   it('packages the installed Electron distribution', () => {
@@ -109,6 +111,17 @@ describe('desktop packaging configuration', () => {
     expect(desktopPackage.build.asarUnpack).toContain('lib/harness-theme-preload.cjs')
     expect(desktopPackage.build.asarUnpack).toContain('lib/chat-theme-preload.cjs')
     expect(desktopPackage.build.afterPack).toBe('./scripts/verify-packaged-runtime.ts')
+  })
+
+  it('ships the memory runtime module and withholds the Electron fixtures', () => {
+    // The memory runtime is compiled into lib/, which the packaged main process
+    // carries. The fixtures are the only consumers that import it by path, and
+    // they reach it from the checkout instead, so a packaged application has no
+    // route to tests/ at all.
+    expect(includesPackagedFile('lib/types/deepseek-memory-extension.js')).toBe(true)
+    expect(includesPackagedFile('tests/fixtures/deepseek-memory-app/main.mjs')).toBe(false)
+    expect(includesPackagedFile('tests/fixtures/dual-mode-app/main.mjs')).toBe(false)
+    expect(desktopPackage.build.files).toEqual(['lib/**', 'package.json'])
   })
 
   it('unlocks the temporary signing Keychain with its own password', () => {

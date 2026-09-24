@@ -1,6 +1,7 @@
 /** Production Electron entrypoint for the dual-mode desktop application. */
 
 import { createNativeNotifications } from './native-notifications.ts'
+import { applicationMenuTemplate } from './application-menu.ts'
 import { randomBytes } from 'node:crypto'
 import { observeHarnessNotifications } from './harness-notification-runtime.ts'
 import { existsSync } from 'node:fs'
@@ -33,6 +34,7 @@ import {
 } from './desktop-application.ts'
 import { createHarnessUpdateView, type HarnessUpdateView } from './harness-update-view.ts'
 import { createHostSupervisor, spawnDshWeb } from './host-supervisor.ts'
+import { desktopStoragePaths, preserveDesktopPreferences } from './desktop-storage.ts'
 import { createHarnessHealthCheck } from './managed-harness-health.ts'
 import { createNpmHarnessInstaller } from './managed-harness-installer.ts'
 import { managedHarnessLayout } from './managed-harness-paths.ts'
@@ -71,10 +73,17 @@ let quitOperation: Promise<void> | undefined
  * versions, staging, the package cache, and diagnostics. Harness user data is
  * deliberately not here — the CLI keeps it in its own home, so switching a
  * program version never touches it.
- * @returns the managed root inside the application's user-data directory.
+ * @returns the managed root inside the platform's desktop program directory.
  */
+function managedStorage(): ReturnType<typeof desktopStoragePaths> {
+  return desktopStoragePaths({
+    platform: process.platform, userData: app.getPath('userData'), home: app.getPath('home'),
+    explicitUserData: app.commandLine.hasSwitch('user-data-dir'),
+  })
+}
+
 function managedHarnessRoot(): string {
-  return join(app.getPath('userData'), 'managed-harness')
+  return managedStorage().managedRoot
 }
 
 /** Executable, entry, and flags for one Harness launch. */
@@ -94,12 +103,16 @@ interface HarnessLaunch {
  */
 function createManagedHarness(): ManagedHarnessRuntime | undefined {
   if (!app.isPackaged) return undefined
-  const root = managedHarnessRoot()
-  const layout = managedHarnessLayout(root)
+  const storage = managedStorage()
+  const root = storage.managedRoot
+  const rootAnchor = storage.programRoot === app.getPath('userData') ? storage.programRoot : app.getPath('home')
+  const layout = managedHarnessLayout(root, { rootBoundary: storage.programRoot, rootAnchor })
   const nodeExecutable = process.execPath
   const cwd = app.getPath('home')
   return createManagedHarnessRuntime({
     root,
+    rootBoundary: storage.programRoot,
+    rootAnchor,
     nodeExecutable,
     cwd,
     electronRunAsNode: true,
@@ -252,9 +265,10 @@ function shellPaths(): {
 
 /** Load the app-local tray template, with an empty fallback for incomplete staging. */
 function trayImage(): Electron.NativeImage {
+  const asset = process.platform === 'darwin' ? 'trayTemplate.png' : 'icon_tray.png'
   const candidates = app.isPackaged
-    ? [join(process.resourcesPath, 'desktop-resources/trayTemplate.png')]
-    : [join(DESKTOP_DIR, 'resources/trayTemplate.png')]
+    ? [join(process.resourcesPath, 'desktop-resources', asset)]
+    : [join(DESKTOP_DIR, 'resources', asset)]
   const path = candidates.find(candidate => existsSync(candidate))
   const image = path === undefined ? nativeImage.createEmpty() : nativeImage.createFromPath(path)
   if (process.platform === 'darwin') image.setTemplateImage(true)
@@ -584,116 +598,20 @@ function trayTemplate(model: ShellMenuModel): MenuItemConstructorOptions[] {
       ],
     },
     { type: 'separator' },
+    { label: model.strings.harness, submenu: harnessMenuTemplate(model.strings) },
     ...model.groups.map(settingsSubmenu),
     { type: 'separator' },
     { label: model.quit, click: () => { void requestAppQuit() } },
   ]
 }
 
-/**
- * Build the application menu: the desktop settings inside the product menu,
- * beside the standard edit, view and window roles Electron ships. Keeping those
- * roles is what preserves copy/paste, reload and window management for the
- * Harness and Chat renderers, which have no menu of their own. Every role still
- * carries an explicit label, so the menu speaks the shell locale instead of
- * Electron's English defaults and the bundle's internal package name; the items
- * the operating system inserts into these menus follow the bundle localization.
- * The Window menu is relabelled after the build, see localizeWindowMenu.
- * @param model - the shell menu model for the current preferences.
- * @returns the application menu template.
- */
-function applicationMenuTemplate(model: ShellMenuModel): MenuItemConstructorOptions[] {
-  const strings = model.strings
-  return [
-    {
-      label: APP_NAME,
-      submenu: [
-        { role: 'about', label: strings.aboutApp },
-        { type: 'separator' },
-        {
-          label: strings.memory,
-          submenu: [
-            { label: strings.manageMemory, click: () => { runMemoryAction('manage') } },
-            { label: strings.exportMemory, click: () => { runMemoryAction('export') } },
-            { label: strings.importMemory, click: () => { runMemoryAction('import') } },
-            { type: 'separator' },
-            {
-              label: currentMemoryStatus().phase === 'ready'
-                ? strings.memoryReady
-                : strings.memoryUnavailable,
-              enabled: false,
-            },
-          ],
-        },
-        { type: 'separator' },
-        { label: strings.harness, submenu: harnessMenuTemplate(strings) },
-        { type: 'separator' },
-        { label: model.settings, submenu: model.groups.map(settingsSubmenu) },
-        { type: 'separator' },
-        { role: 'hide', label: strings.hideApp },
-        { role: 'hideOthers', label: strings.hideOthers },
-        { role: 'unhide', label: strings.unhideApp },
-        { type: 'separator' },
-        { role: 'quit', label: strings.quitApp },
-      ],
-    },
-    {
-      label: strings.menuEdit,
-      submenu: [
-        { role: 'undo', label: strings.undo },
-        { role: 'redo', label: strings.redo },
-        { type: 'separator' },
-        { role: 'cut', label: strings.cut },
-        { role: 'copy', label: strings.copy },
-        { role: 'paste', label: strings.paste },
-        { role: 'pasteAndMatchStyle', label: strings.pasteAndMatchStyle },
-        { role: 'delete', label: strings.delete },
-        { role: 'selectAll', label: strings.selectAll },
-        { type: 'separator' },
-        {
-          label: strings.substitutions,
-          submenu: [
-            { role: 'showSubstitutions', label: strings.showSubstitutions },
-            { type: 'separator' },
-            { role: 'toggleSmartQuotes', label: strings.smartQuotes },
-            { role: 'toggleSmartDashes', label: strings.smartDashes },
-            { role: 'toggleTextReplacement', label: strings.textReplacement },
-          ],
-        },
-        {
-          label: strings.speech,
-          submenu: [
-            { role: 'startSpeaking', label: strings.startSpeaking },
-            { role: 'stopSpeaking', label: strings.stopSpeaking },
-          ],
-        },
-      ],
-    },
-    {
-      label: strings.menuView,
-      submenu: [
-        { role: 'reload', label: strings.reload },
-        { role: 'forceReload', label: strings.forceReload },
-        { role: 'toggleDevTools', label: strings.toggleDevTools },
-        { type: 'separator' },
-        { role: 'resetZoom', label: strings.actualSize },
-        { role: 'zoomIn', label: strings.zoomIn },
-        { role: 'zoomOut', label: strings.zoomOut },
-        { type: 'separator' },
-        { role: 'togglefullscreen', label: strings.toggleFullScreen },
-      ],
-    },
-    // The Window menu keeps its role: it is what registers the menu with the
-    // operating system, which then inserts its tiling and window-list items
-    // beside ours. localizeWindowMenu rewrites the labels the role owns.
-    { role: 'windowMenu' },
-  ]
-}
-
 /** Re-render both shell menus from the single preference authority. */
 function applyShellMenus(): void {
   const model = shellMenuModel(currentPreferences())
-  const menu = Menu.buildFromTemplate(applicationMenuTemplate(model))
+  const menu = Menu.buildFromTemplate(applicationMenuTemplate(model, {
+    memory: runMemoryAction, memoryReady: currentMemoryStatus().phase === 'ready',
+    harness: harnessMenuTemplate(model.strings), settings: model.groups.map(settingsSubmenu),
+  }, process.platform))
   configureNativeWindowMenu(menu, model.strings, process.platform)
   Menu.setApplicationMenu(menu)
   tray?.setContextMenu(Menu.buildFromTemplate(trayTemplate(model)))
@@ -702,12 +620,18 @@ function applyShellMenus(): void {
 function createTray(): void {
   tray = new Tray(trayImage())
   tray.setToolTip(APP_NAME)
+  if (process.platform === 'win32') tray.on('double-click', () => { void desktopApplication?.showWindow() })
   tray.on('click', () => { void desktopApplication?.showWindow() })
   applyShellMenus()
 }
 
 async function boot(): Promise<void> {
   const paths = shellPaths()
+  const storage = desktopStoragePaths({
+    platform: process.platform, userData: app.getPath('userData'), home: app.getPath('home'),
+    explicitUserData: app.commandLine.hasSwitch('user-data-dir'),
+  })
+  await preserveDesktopPreferences(join(app.getPath('userData'), 'desktop-state.json'), storage.stateFile)
   const chatSession = session.fromPartition(CHAT_PARTITION)
   memoryRuntime = new DeepSeekMemoryRuntime({
     extensionPath: app.isPackaged
@@ -729,7 +653,7 @@ async function boot(): Promise<void> {
     console.error('managed Harness recovery failed:', error)
   })
   desktopApplication = createDesktopApplication({
-    stateFile: join(app.getPath('userData'), 'desktop-state.json'),
+    stateFile: storage.stateFile,
     shellPath: paths.shellPath,
     preloadPath: paths.preloadPath,
     chromePath: paths.chromePath,
@@ -756,7 +680,7 @@ async function boot(): Promise<void> {
     harnessSetupRequired: () => harnessLaunch() === undefined,
     observeHarnessNotifications: async (origin, contents) => {
       const launch = managedHarness?.launch()
-      if (process.platform !== 'darwin' || launch === undefined) return async () => {}
+      if (launch === undefined) return async () => {}
       return observeHarnessNotifications({
         cliEntry: launch.cliEntry, origin,
         fetch: (input, init) => contents.session.fetch(input instanceof URL ? input.href : input, init),
@@ -816,6 +740,21 @@ async function boot(): Promise<void> {
   // Startup loaded the durable preferences; re-render so both menus mark the
   // choices the user made in an earlier launch rather than the fallbacks.
   applyShellMenus()
+}
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId('ai.deepseek.harness.desktop')
+  // A hidden title bar does not render a Windows menu bar. Keep the native
+  // application menu reachable from every focused view without changing layout.
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.key !== 'F10' || input.control || input.alt || input.meta || input.shift) return
+      const focused = BrowserWindow.getFocusedWindow()
+      if (focused === null) return
+      event.preventDefault()
+      Menu.getApplicationMenu()?.popup({ window: focused, x: 8, y: 44 })
+    })
+  })
 }
 
 if (!app.requestSingleInstanceLock()) {

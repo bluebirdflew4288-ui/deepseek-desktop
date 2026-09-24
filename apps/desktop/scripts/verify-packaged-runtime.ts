@@ -36,12 +36,13 @@ const REQUIRED_SHELL_FILES = [
  * Resolve the packaged Electron binary, which is what runs both the npm runtime
  * and the managed Harness.
  * @param context - Electron Builder's completed application directory.
- * @returns The executable on macOS, and undefined where this hook does not yet
+ * @returns The executable on macOS or Windows, and undefined where this hook does not yet
  * know the bundle layout.
  */
 function electronExecutable(context: AfterPackContext): string | undefined {
-  if (context.electronPlatformName !== 'darwin') return undefined
   const product = context.packager.appInfo.productFilename
+  if (context.electronPlatformName === 'win32') return join(context.appOutDir, `${product}.exe`)
+  if (context.electronPlatformName !== 'darwin') return undefined
   return join(context.appOutDir, `${product}.app`, 'Contents', 'MacOS', product)
 }
 

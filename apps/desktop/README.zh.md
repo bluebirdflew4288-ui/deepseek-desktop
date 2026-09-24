@@ -59,7 +59,7 @@ Host 启动失败、Host 意外退出或 Harness renderer 失败时，只会把 
 
 Chat 与 Harness 的来源级 attention 在浅色和深色主题下共用固定通知红（`#ff3b30`），独立于选中状态和普通通知强调色。来源切换入口保留该布尔圆点；macOS Dock 数字把持久化的 Chat 与 Harness pending 数量相加，每个未见结果计一次，显式进入某一来源只清除该来源的计数，点击通知也属于显式进入。关闭 Dock 展示只隐藏数字，不丢弃提示，普通未读不会进入该数字，数字也会跨重启恢复。Chat attention 由已审计的 completion、regenerate、continue 端点成功完成触发；用户主动 stop 的生成不会被播报。
 
-Desktop 状态文件通过原子写入保存最小通知元数据和去重记录，不保存消息正文或 Memory 内容。点击通知恢复窗口并选择对应模式。只有确认正在查看准确目标时才标记对应事件已读；未知目标保留未读。macOS 原生通知使用固定本地化文案，其他平台尚无通知实现。
+Desktop 状态文件通过原子写入保存最小通知元数据和去重记录，不保存消息正文或 Memory 内容。点击通知恢复窗口并选择对应模式。只有确认正在查看准确目标时才标记对应事件已读；未知目标保留未读。macOS 与 Windows 原生通知使用固定本地化文案。Dock 数字仍仅用于 macOS；Windows 使用系统原生通知与站内未读提示。
 
 **基础 Harness 通知：**仅对指纹匹配的已审计托管运行时，通过只读 `session/list` 和 `session/page` 轮询启用后台失败与完成通知。通知观察不打开 `follow` 或 `$events`。窗口聚焦、可见且未最小化时抑制原生投递；隐藏或最小化时允许投递。每个未见 Harness 结果都会点亮 Harness 圆点并向 Dock 数字加一，其 receipt 保持已读且不进入普通未读；点击后恢复 Harness。分叉会话和子任务均排除。首次观察或连续性中断只建立基线，不补发历史；有界轮询可能漏报。参见[基础通知决策](../../.agents/notes/implemented/feature/2026-09-14-harness-background-failure-notifications.md)。
 
@@ -83,9 +83,25 @@ Electron Builder 运行前，该命令会通过 Electron 自带的校验安装�
 
 打包后的应用通过 Electron 的 Node 模式，在独立进程内安装并运行所选官方版本的 `@deepseek-ai/dsh` CLI。应用因此保留受 supervisor 管理的 Host 生命周期，无需携带第二个 Node 可执行文件或固定 Harness 依赖闭包。固定版本 npm 运行时会在打包前和 `afterPack` 检查中验证。macOS 和 Windows 都使用受跟踪的 `apps/desktop/build/icon.png` 原始文件；仓库不预处理图标，也不提交平台专用图标变体。
 
+### Windows 本地试用
+
+在 Windows x64 上构建未签名的当前用户 NSIS 安装器和 ZIP，不执行发布：
+
+```sh
+pnpm --filter @deepseek-ai/dsh-desktop run dist:win
+```
+
+产物位于 `apps/desktop/dist/`。安装器创建桌面与开始菜单快捷方式，卸载时保留应用数据。按 F10 打开应用菜单；关闭窗口或按 Alt+F4 隐藏窗口，点击彩色托盘图标可恢复窗口，包括从最小化状态恢复。通过托盘退出 Desktop。Windows 菜单省略 macOS 专属的隐藏、服务、语音及文本替换项。Windows 支持 Chat 与 Harness 的系统通知及站内未读提示；真实事件仍需登录 Chat 或可用的 Harness 才能触发。打包时使用 Windows 应用自身的可执行文件验证固定版本的 npm。
+
+Windows 恢复流程等待引用托管程序目录的进程退出。如果无法枚举进程或文件仍在使用，安装、更新与回滚会一直受阻，直到重启后恢复成功。恢复流程不会凭旧 PID 记录终止进程。
+
+Windows 默认启动时，可替换的 Desktop 状态文件和托管 Harness 安装位于 `%USERPROFILE%\\.deepseek-desktop`；Chromium 的 Chat 配置、登录和 Memory 仍保存在 Electron 的漫游用户数据目录。显式传入 `--user-data-dir` 时，所有 Desktop 自有文件都留在所选配置目录。升级后首次启动仅在新状态文件不存在时，才从旧状态文件复制已验证的模式、外观和语言偏好；旧文件与浏览器配置不会被移动或删除。
+
+托管安装 manifest 将 Cordis 4.0.2 与 `cordis-plugin-loader` 1.0.3 固定为一组。Harness 1.0.5 发布包在安装根目录使用 4.0.4 与 1.0.5，而 DSH 子树仍使用旧版本；递归 profile entry 因此会报 `entry._await is not a function`。旧版本配对已在仅含程序包的 synthetic profile 中启动，并到达本机 HTTP token fence。试用机上的干净 npm 暂存安装尚未验证，本轮也没有修复当前默认 profile。必须等暂存安装通过安装器健康检查后，才能替换现有托管程序目录；不要手动覆盖该目录。
+
 ### 自动 GitHub 发布
 
-推送一个版本与 `apps/desktop/package.json` 一致的 `vX.Y.Z` 标签会启动 `.github/workflows/desktop-release.yml`。独立的原生 runner 分别构建未签名的 macOS Apple Silicon DMG/ZIP 和 Windows x64 NSIS/ZIP 文件；只有两端构建都成功，工作流才会创建或更新对应的 GitHub Release。版本不一致或缺少产物会在发布前使工作流失败。
+推送一个版本与 `apps/desktop/package.json` 一致、且位于 `main` 历史中的 `vX.Y.Z` 标签会启动 `.github/workflows/desktop-release.yml`。原生 runner 构建 macOS Apple Silicon DMG/ZIP 和 Windows x64 NSIS/ZIP。macOS 产物仅使用 ad hoc 签名，未使用 Developer ID 签名或公证。Windows 正式发布必须配置 PFX、密码、精确匹配的预期 Publisher Subject 和 RFC 3161 时间戳；安装器与应用可执行文件必须通过可信 Authenticode 验证后才可上传。签名输入缺失或验证失败都会阻止发布。工作流先创建草稿 Release，再核对明确列出的产物清单及 SHA-256；不会覆盖哈希不匹配的已有产物。工作流不发布 Desktop 更新器 metadata。
 
 ### 已签名的 macOS DMG
 
@@ -129,7 +145,7 @@ rmdir "$MOUNT_POINT"
 
 首个桌面装配使用回环 HTTP Host。renderer 和 Host 协议保持不变，因此后续可替换为 GUI 架构预留的 IPC carrier，而无需改动产品功能。
 
-GitHub Actions 会发布未签名的 macOS 和 Windows 安装包。带凭据的已签名安装包路径目前只面向 macOS；Windows 签名与 Linux 发布打包仍属于后续发布工作。
+GitHub Actions 的 Windows x64 正式发布要求可信 Authenticode 签名；签名凭据不可用时会失败关闭。上文的未签名 Windows 1.0.5 本地试用构建命令仅供本地测试。macOS 发布产物仍只有 ad hoc 签名，未使用 Developer ID 分发签名或公证。Linux 发布打包目前不在目标范围内。
 
 本地 Electron 场景验证 Desktop 生命周期与存储策略，不验证在线 DeepSeek 网站的兼容性。DeepSeek 可以独立改变认证来源、WAF 行为、页面要求或嵌入策略。任何登录方式只有在 macOS 和 Windows 上都通过以下冒烟流程后，才具备发布资格：
 

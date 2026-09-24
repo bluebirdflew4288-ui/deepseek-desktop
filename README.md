@@ -69,7 +69,7 @@ Recovery handles interrupted program transactions. Harness rollback currently re
 
 ## Installation
 
-Human acceptance covers the macOS Apple Silicon development build. There is no stable public release of this derivative yet; signing and notarization have not been completed. Windows x64 packaging configuration exists, but this acceptance does not certify a Windows build. Linux Desktop packages are not a current release target.
+Human acceptance covers the macOS Apple Silicon development build. There is no stable public release of this derivative yet. The release workflow requires a trusted Windows x64 Authenticode certificate and blocks unless both the installer and application executable have a valid chain, the configured full certificate Subject matches exactly, and a trusted RFC 3161 timestamp is present. Those Windows signing credentials are not configured, so a release currently fails closed. macOS release artifacts use an ad hoc signature only; they are not Developer ID signed or notarized. The user accepted the unsigned Windows x64 1.0.5 local trial build, including its native menus, tray behavior, and notifications. That acceptance applies to the earlier installed build only. The latest source passed `pnpm run build`, but two isolated packaging preflights failed in `resEdit` with `EBUSY` before producing a new installer or ZIP; installation and runtime validation of the latest source remain unverified. Linux Desktop packages are not a current release target.
 
 ### Packaged users
 
@@ -101,6 +101,7 @@ The package command stages pinned npm and builds the Desktop app. It does not pu
 3. Open **Memory → Manage Memory** to inspect or add local records; use JSON export for a backup.
 4. Use the Harness menu for explicit update checks, restart, and eligible rollback.
 5. On macOS, Command+W hides the window; reactivate the app to restore it. Command+Q exits Desktop and its owned managed processes.
+6. On Windows, F10 opens the application menu. Closing the window or pressing Alt+F4 hides it; click the tray icon to restore it, including from a minimized state. Use the tray's Quit command to exit.
 
 ## Data, privacy, and runtime isolation
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -87,6 +87,18 @@ async function stagedNpm(options: { version?: string; bundled?: boolean } = {}):
 }
 
 describe('packaged desktop runtime verification', () => {
+  it.runIf(process.platform === 'win32')('executes the Windows binary and rejects a broken npm CLI', async () => {
+    const { appOutDir } = await packagedApp('win32')
+    const stagedRoot = await stagedNpm()
+    try {
+      await copyFile(process.execPath, join(appOutDir, 'DeepSeek Desktop.exe'))
+      await writeFile(join(stagedRoot, 'npm', 'bin', 'npm-cli.js'), 'process.exit(17)')
+      await expect(verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)).rejects.toThrow(/did not execute/)
+    } finally {
+      await rm(appOutDir, { recursive: true, force: true })
+      await rm(stagedRoot, { recursive: true, force: true })
+    }
+  })
   it('accepts shell assets and the pinned npm runtime without bundled Harness files', async () => {
     const { appOutDir, resources } = await packagedApp()
     const stagedRoot = await stagedNpm()

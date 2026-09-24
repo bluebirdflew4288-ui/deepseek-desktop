@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHarnessHealthCheck } from '../src/managed-harness-health.ts'
 import {
@@ -67,6 +67,16 @@ async function materializeHarness(directory: string, version: string): Promise<v
   )
 }
 
+/** Mark one fixture as a version directory installed by Desktop. */
+async function markDesktopManagedVersion(directory: string, version: string, transactionId = '11111111-1111-4111-8111-111111111111'): Promise<void> {
+  await writeFile(join(directory, '.dsh-desktop-managed.json'), JSON.stringify({
+    schemaVersion: 1,
+    package: HARNESS_PACKAGE,
+    version,
+    transactionId,
+  }))
+}
+
 interface HarnessFixtures {
   runtime: ManagedHarnessRuntime
   readonly releases: string[]
@@ -93,6 +103,7 @@ interface HarnessFixtures {
   /** Whether the next staging record cancels the transaction from inside it,
    * which is the last await before the package manager is started. */
   cancelOnStagingRecord: boolean
+  failAfterBackup: boolean
   /** Whether the next health check waits for `releaseHealth`. */
   holdsHealth: boolean
   /** Let a held health check finish. */
@@ -110,7 +121,13 @@ interface HarnessFixtures {
  * @param releases - Official versions the registry reports, newest last.
  * @returns The runtime and the record of every call its dependencies received.
  */
-async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: string): Promise<HarnessFixtures> {
+async function fixtures(
+  releases: string[] = ['0.1.5-rc.1'],
+  commandOutput?: string,
+  runtimeRoot = root,
+  rootBoundary?: string,
+  rootAnchor?: string,
+): Promise<HarnessFixtures> {
   let releaseHeldInstall: (() => void) | undefined
   let releaseHeldLookup: (() => void) | undefined
   let releaseHeldHealth: (() => void) | undefined
@@ -130,13 +147,17 @@ async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: str
     holdsRelease: false,
     releaseLookup: () => { releaseHeldLookup?.() },
     cancelOnStagingRecord: false,
+    failAfterBackup: false,
     holdsHealth: false,
     releaseHealth: () => { releaseHeldHealth?.() },
     installSignals: [],
     releaseSignals: [],
   }
   state.runtime = createManagedHarnessRuntime({
-    root,
+    platform: 'darwin',
+    root: runtimeRoot,
+    ...(rootBoundary === undefined ? {} : { rootBoundary }),
+    ...(rootAnchor === undefined ? {} : { rootAnchor }),
     nodeExecutable: '/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop',
     cwd: '/Users/tester',
     electronRunAsNode: true,
@@ -199,6 +220,15 @@ async function fixtures(releases: string[] = ['0.1.5-rc.1'], commandOutput?: str
         if (state.cancelOnStagingRecord && entry.phase === 'staging') {
           state.cancelOnStagingRecord = false
           state.runtime.cancelTransaction()
+        }
+        if (state.failAfterBackup && entry.phase === 'backed-up') {
+          state.failAfterBackup = false
+          const layout = managedHarnessLayout(runtimeRoot)
+          const pending = parseManagedHarnessState(await readFile(layout.stateFile, 'utf8')).pending
+          if (pending?.transactionId !== undefined) {
+            await rm(layout.backupDirectory(pending.transactionId), { recursive: true, force: true })
+          }
+          throw new Error('injected missing transaction backup')
         }
       },
     },
@@ -290,8 +320,8 @@ describe('managed Harness layout', () => {
   it('keeps the disposable health home inside the managed root, away from Harness user data', () => {
     const layout = managedHarnessLayout(root)
 
-    expect(layout.healthHome('0.1.5-rc.1')).toBe(join(root, 'staging', '0.1.5-rc.1.health-home'))
-    expect(layout.healthHome('0.1.5-rc.1').startsWith(root)).toBe(true)
+    expect(layout.healthHome('11111111-1111-4111-8111-111111111111')).toBe(join(root, 'health', '11111111-1111-4111-8111-111111111111'))
+    expect(layout.healthHome('11111111-1111-4111-8111-111111111111').startsWith(root)).toBe(true)
     expect(harnessCliEntry(layout.versionDirectory('0.1.5-rc.1')))
       .toBe(join(root, 'versions', '0.1.5-rc.1', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))
   })
@@ -379,7 +409,7 @@ describe('managed Harness installer', () => {
     expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined()
   })
 
-  it('replaces the target wholesale and hands the package manager an empty root project', async () => {
+  it('refuses an existing target without deleting its contents', async () => {
     const layout = managedHarnessLayout(root)
     const target = layout.stagingDirectory('0.1.5-rc.1')
     await mkdir(target, { recursive: true })
@@ -395,15 +425,73 @@ describe('managed Harness installer', () => {
       },
     })
 
-    await installer.install({ directory: target, version: '0.1.5-rc.1' })
+    await expect(installer.install({ directory: target, version: '0.1.5-rc.1' })).rejects.toThrow(/already exists/iu)
 
+    expect(seen).toEqual([])
+    await expect(readFile(join(target, 'stale.js'), 'utf8')).resolves.toBe('stale\n')
+  })
+
+  it('installs into a fresh exclusive transaction directory', async () => {
+    const layout = managedHarnessLayout(root)
+    const target = layout.stagingDirectory('11111111-1111-4111-8111-111111111111')
+    const seen: Array<{ command: string; env: NodeJS.ProcessEnv }> = []
+    const installer = createNpmHarnessInstaller({
+      layout, nodeExecutable: '/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop',
+      npmCliEntry: '/resources/npm/bin/npm-cli.js',
+      runProcess: async (request) => { seen.push({ command: request.command, env: request.env }); return { exitCode: 0, signal: null, output: '' } },
+    })
+    await mkdir(layout.staging, { recursive: true })
+    await installer.install({ directory: target, version: '0.1.5-rc.1' })
     expect(seen[0]?.command).toBe('/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop')
     expect(seen[0]?.env.ELECTRON_RUN_AS_NODE).toBe('1')
     expect(seen[0]?.env.PATH).toBe(managedSearchPath())
     await expect(readdir(target).then(entries => entries.sort())).resolves.toEqual(['package.json'])
+    const stagingManifest = JSON.parse(await readFile(join(target, 'package.json'), 'utf8')) as {
+      overrides?: Record<string, string>
+    }
+    expect(stagingManifest.overrides).toEqual({
+      '@deepseek-ai/cordis': '4.0.2',
+      '@deepseek-ai/cordis-plugin-loader': '1.0.3',
+    })
     expect(await readFile(layout.npmUserConfig, 'utf8')).toBe('')
     expect(await readFile(layout.npmGlobalConfig, 'utf8')).toBe('')
   })
+
+  it.each(['cache-root', 'config-root', 'user-config-file'] as const)(
+    'refuses a reparse point at managed npm %s without changing the external sentinel',
+    async (targetKind) => {
+      const layout = managedHarnessLayout(root)
+      const outside = join(root, 'outside-' + targetKind)
+      await mkdir(outside, { recursive: true })
+      const sentinel = join(outside, 'sentinel.txt')
+      await writeFile(sentinel, 'preserve')
+      const target = targetKind === 'cache-root' ? layout.npmCache
+        : targetKind === 'config-root' ? dirname(layout.npmUserConfig)
+          : layout.npmUserConfig
+      await mkdir(join(root, 'staging'), { recursive: true })
+      if (targetKind === 'user-config-file') {
+        await mkdir(dirname(target), { recursive: true })
+        await symlink(outside, target, 'junction')
+      } else {
+        await symlink(outside, target, 'junction')
+      }
+      const runProcess = vi.fn(async () => ({ exitCode: 0, signal: null, output: '' }))
+      const installer = createNpmHarnessInstaller({
+        layout,
+        nodeExecutable: '/bin/true',
+        npmCliEntry: '/npm-cli.js',
+        runProcess,
+      })
+
+      await expect(installer.install({
+        directory: join(root, 'staging', 'candidate'),
+        version: '0.1.5-rc.1',
+      })).rejects.toThrow(/reparse|symbolic link/iu)
+
+      await expect(readFile(sentinel, 'utf8')).resolves.toBe('preserve')
+      expect(runProcess).not.toHaveBeenCalled()
+    },
+  )
 
   it('accepts the exact release it staged and rejects a substituted one', async () => {
     const directory = join(root, 'candidate')
@@ -437,7 +525,8 @@ describe('managed Harness health check', () => {
     vi.mocked(spawn).mockReturnValue(spawned as never)
     const layout = managedHarnessLayout(root)
     await materializeHarness(layout.versionDirectory('0.1.5-rc.1'), '0.1.5-rc.1')
-    const healthHome = layout.healthHome('0.1.5-rc.1')
+    const transactionId = '11111111-1111-4111-8111-111111111111'
+    const healthHome = layout.healthHome(transactionId)
     const check = createHarnessHealthCheck({
       layout,
       nodeExecutable: '/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop',
@@ -455,7 +544,7 @@ describe('managed Harness health check', () => {
       },
     })
 
-    await expect(check.check({ versionDirectory: layout.versionDirectory('0.1.5-rc.1'), version: '0.1.5-rc.1' }))
+    await expect(check.check({ versionDirectory: layout.versionDirectory('0.1.5-rc.1'), version: '0.1.5-rc.1', transactionId }))
       .resolves.toEqual({ healthy: true })
 
     const [command, args, options] = vi.mocked(spawn).mock.calls[0] ?? []
@@ -487,7 +576,7 @@ describe('managed Harness health check', () => {
       }),
     })
 
-    await expect(check.check({ versionDirectory: layout.versionDirectory('0.1.5-rc.1'), version: '0.1.5-rc.1' }))
+    await expect(check.check({ versionDirectory: layout.versionDirectory('0.1.5-rc.1'), version: '0.1.5-rc.1', transactionId: '11111111-1111-4111-8111-111111111111' }))
       .resolves.toEqual({ healthy: false, failure: 'desktop Host exited before readiness (code 1, signal null)' })
   })
 })
@@ -524,6 +613,34 @@ describe('managed Harness diagnostics', () => {
     expect(describeFailure(error)).toBe('first line')
     expect(describeFailure('plain')).toBe('plain')
   })
+
+  it('refuses a log-directory junction without writing outside the managed root', async () => {
+    const outside = join(root, 'outside-log')
+    await mkdir(outside, { recursive: true })
+    const sentinel = join(outside, 'sentinel.txt')
+    await writeFile(sentinel, 'preserve')
+    const logDirectory = join(root, 'logs')
+    await symlink(outside, logDirectory, 'junction')
+    const diagnostics = createManagedHarnessDiagnostics({ file: join(logDirectory, 'managed-harness.log') })
+
+    await expect(diagnostics.record({ operation: 'test' })).rejects.toThrow(/reparse|symbolic link/iu)
+
+    await expect(readFile(sentinel, 'utf8')).resolves.toBe('preserve')
+    await expect(readdir(outside)).resolves.toEqual(['sentinel.txt'])
+  })
+
+  it('refuses an existing log-file symlink without appending to its target', async () => {
+    const outside = join(root, 'outside-log-file.txt')
+    await writeFile(outside, 'sentinel')
+    const logDirectory = join(root, 'logs')
+    await mkdir(logDirectory, { recursive: true })
+    await symlink(outside, join(logDirectory, 'managed-harness.log'), 'junction')
+    const diagnostics = createManagedHarnessDiagnostics({ file: join(logDirectory, 'managed-harness.log') })
+
+    await expect(diagnostics.record({ operation: 'test' })).rejects.toThrow(/reparse|symbolic link/iu)
+
+    await expect(readFile(outside, 'utf8')).resolves.toBe('sentinel')
+  })
 })
 
 describe('managed Harness transactions', () => {
@@ -547,6 +664,7 @@ describe('managed Harness transactions', () => {
     expect(context.installed).toEqual(['0.1.5-rc.1'])
     expect(context.healthChecked).toEqual(['0.1.5-rc.1'])
     await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1'])
+    await expect(stagedVersions()).resolves.toEqual([])
   })
 
   it('never asks the registry before the user asks it to', async () => {
@@ -584,6 +702,7 @@ describe('managed Harness transactions', () => {
     await expect(context.runtime.update()).resolves.toEqual({ outcome: 'promoted', version: '0.1.5-rc.2' })
     expect(context.runtime.status()).toEqual({ phase: 'ready', current: '0.1.5-rc.2', previous: '0.1.5-rc.1' })
     expect(context.runtime.retained()).toEqual({ current: '0.1.5-rc.2', previous: '0.1.5-rc.1' })
+    await expect(stagedVersions()).resolves.toEqual([])
   })
 
   it('reports up to date when the official latest is already promoted', async () => {
@@ -683,21 +802,88 @@ describe('managed Harness transactions', () => {
     await expect(context.runtime.update()).resolves.toEqual({ outcome: 'promoted', version: '0.1.5-rc.3' })
 
     expect(context.runtime.retained()).toEqual({ current: '0.1.5-rc.3', previous: '0.1.5-rc.2' })
-    // The version two updates back is program files only, so it is collected.
-    await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.2', '0.1.5-rc.3'])
+    // Keep old versions because a copied ownership marker cannot distinguish an
+    // obsolete install from a user's manual backup.
+    await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1', '0.1.5-rc.2', '0.1.5-rc.3'])
   })
 
-  it('collects a version directory no retained version references', async () => {
+  it('preserves a version directory no retained version references', async () => {
     const context = await fixtures(['0.1.5-rc.1'])
     const layout = managedHarnessLayout(root)
-    await materializeHarness(layout.versionDirectory('0.0.1-orphan'), '0.0.1-orphan')
+    const orphan = layout.versionDirectory('0.0.1-orphan')
+    await materializeHarness(orphan, '0.0.1-orphan')
+    await markDesktopManagedVersion(orphan, '0.0.1-orphan')
     await materializeHarness(layout.stagingDirectory('0.0.2-stale'), '0.0.2-stale')
 
     await context.runtime.recover()
     await context.runtime.install()
 
-    await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1'])
-    await expect(stagedVersions()).resolves.toEqual([])
+    await expect(retainedVersions()).resolves.toEqual(['0.0.1-orphan', '0.1.5-rc.1'])
+    await expect(stagedVersions()).resolves.toEqual(['0.0.2-stale'])
+  })
+
+  it('preserves old versions, copied markers, backups, and unknown entries', async () => {
+    const context = await fixtures(['0.1.5-rc.1'])
+    const layout = managedHarnessLayout(root)
+    const orphan = layout.versionDirectory('0.0.1-orphan')
+    await materializeHarness(orphan, '0.0.1-orphan')
+    await markDesktopManagedVersion(orphan, '0.0.1-orphan')
+
+    const backup = layout.versionDirectory('0.0.2-backup')
+    await materializeHarness(backup, '0.0.2-backup')
+    const missingTransactionId = layout.versionDirectory('0.0.7-no-transaction-id')
+    await materializeHarness(missingTransactionId, '0.0.7-no-transaction-id')
+    await writeFile(join(missingTransactionId, '.dsh-desktop-managed.json'), JSON.stringify({
+      schemaVersion: 1, package: HARNESS_PACKAGE, version: '0.0.7-no-transaction-id',
+    }))
+    await mkdir(layout.versionDirectory('manual-backup'), { recursive: true })
+    await writeFile(join(layout.versionDirectory('manual-backup'), 'preserve.txt'), 'manual data')
+    await writeFile(join(layout.versions, 'notes.txt'), 'manual file')
+
+    const mismatched = layout.versionDirectory('0.0.3-mismatched')
+    await materializeHarness(mismatched, '0.0.3-mismatched')
+    await markDesktopManagedVersion(mismatched, '0.0.9-other')
+
+    const wrongPackage = layout.versionDirectory('0.0.5-wrong-package')
+    await materializeHarness(wrongPackage, '0.0.5-wrong-package')
+    await markDesktopManagedVersion(wrongPackage, '0.0.5-wrong-package')
+    await writeFile(join(wrongPackage, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({
+      name: '@unexpected/package',
+      version: '0.0.5-wrong-package',
+    }))
+
+    const invalidSemver = join(layout.versions, '0.0.6-invalid.01')
+    await materializeHarness(invalidSemver, '0.0.6-invalid.01')
+    await markDesktopManagedVersion(invalidSemver, '0.0.6-invalid.01')
+
+    const linkTarget = join(root, 'manual-link-target')
+    await materializeHarness(linkTarget, '0.0.4-linked')
+    await markDesktopManagedVersion(linkTarget, '0.0.4-linked')
+    const linkPath = layout.versionDirectory('0.0.4-linked')
+    await mkdir(layout.versions, { recursive: true })
+    await symlink(linkTarget, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+    const manualStage = join(layout.staging, 'manual-backup')
+    await mkdir(manualStage, { recursive: true })
+    await writeFile(join(manualStage, 'preserve.txt'), 'manual staging data')
+
+    await context.runtime.recover()
+    await context.runtime.install()
+
+    await expect(readdir(layout.versions)).resolves.toEqual(expect.arrayContaining([
+      '0.0.2-backup',
+      '0.0.3-mismatched',
+      '0.0.4-linked',
+      '0.0.5-wrong-package',
+      '0.0.6-invalid.01',
+      '0.0.7-no-transaction-id',
+      'manual-backup',
+      'notes.txt',
+      '0.1.5-rc.1',
+    ]))
+    await expect(readdir(layout.versions)).resolves.toContain('0.0.1-orphan')
+    await expect(readFile(join(linkTarget, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))
+      .resolves.toContain('0.0.4-linked')
+    await expect(readFile(join(manualStage, 'preserve.txt'), 'utf8')).resolves.toBe('manual staging data')
   })
 
   it('rolls back to the retained version and swaps the retention', async () => {
@@ -759,9 +945,10 @@ describe('managed Harness transactions', () => {
 
     expect(context.installed).toEqual(['0.1.5-rc.1', '0.1.5-rc.2', '0.1.5-rc.2'])
     expect(context.runtime.retained()).toEqual({ current: '0.1.5-rc.2', previous: '0.1.5-rc.1' })
+    await expect(stagedVersions()).resolves.toEqual([])
   })
 
-  it('recovers an interrupted update, keeping the last verified version launchable', async () => {
+  it('preserves legacy pending artifacts, allows current read-only launch, and blocks new transactions', async () => {
     const context = await fixtures(['0.1.5-rc.1'])
     await context.runtime.recover()
     await context.runtime.install()
@@ -776,13 +963,15 @@ describe('managed Harness transactions', () => {
 
     await context.runtime.recover()
 
-    expect(context.runtime.status()).toEqual({ phase: 'ready', current: '0.1.5-rc.1' })
+    expect(context.runtime.status()).toMatchObject({ phase: 'failed', current: '0.1.5-rc.1', reason: /legacy.*preserved/iu })
+    expect(context.runtime.availability()).toEqual({ available: true })
     expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8'))).toEqual({
-      schemaVersion: 1,
-      current: '0.1.5-rc.1',
+    await expect(context.runtime.update()).resolves.toMatchObject({ outcome: 'failed' })
+    expect(context.installed).toEqual(['0.1.5-rc.1'])
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8'))).toMatchObject({
+      schemaVersion: 1, current: '0.1.5-rc.1', pending: { operation: 'update', version: '0.1.5-rc.2' },
     })
-    await expect(stagedVersions()).resolves.toEqual([])
+    await expect(stagedVersions()).resolves.toContain('0.1.5-rc.2')
     await expect(retainedVersions()).resolves.toEqual(['0.1.5-rc.1'])
   }, 10_000)
 
@@ -803,6 +992,21 @@ describe('managed Harness transactions', () => {
     })
     // Nothing was installed on the strength of a state file it could not read.
     expect(context.installed).toEqual([])
+  })
+
+  it('fails closed when the managed root is replaced by an external junction', async () => {
+    const parent = join(root, 'controlled-parent')
+    const outside = join(tmpdir(), `managed-harness-external-${Date.now()}`)
+    await mkdir(outside, { recursive: true })
+    await writeFile(join(outside, 'sentinel.txt'), 'preserve')
+    await symlink(outside, parent, 'junction')
+    const context = await fixtures(['0.1.5-rc.1'], undefined, join(parent, 'managed-harness'), parent, root)
+
+    await expect(context.runtime.recover()).rejects.toThrow(/reparse point/iu)
+
+    await expect(readFile(join(outside, 'sentinel.txt'), 'utf8')).resolves.toBe('preserve')
+    await rm(parent, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
   })
 
   it('writes the version directory before the state names it', async () => {
@@ -861,6 +1065,7 @@ describe('managed Harness process ownership', () => {
     })}\n`)
     const ownedCommandLine = `/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop --expose-internals ${cliEntry} web --host 127.0.0.1 --port 0 --no-open DSH_DESKTOP_OWNER_NONCE=11111111-1111-4111-8111-111111111111`
     const runtime = createManagedHarnessRuntime({
+      platform: 'darwin',
       root,
       nodeExecutable: '/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop',
       cwd: '/Users/tester',
@@ -897,6 +1102,7 @@ describe('managed Harness process ownership', () => {
       port: 51234,
     })}\n`)
     const runtime = createManagedHarnessRuntime({
+      platform: 'darwin',
       root,
       nodeExecutable: '/Applications/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop',
       cwd: '/Users/tester',
@@ -936,7 +1142,7 @@ describe('managed runtime final safety regressions', () => {
     expect(context.processes).toEqual([])
   })
 
-  it('restores the retained directory after a crash between replacement renames', async () => {
+  it('preserves a legacy fixed backup after a crash because ownership is unknown', async () => {
     const context = await fixtures()
     await context.runtime.recover()
     await context.runtime.install()
@@ -947,9 +1153,167 @@ describe('managed runtime final safety regressions', () => {
     await writeFile(layout.stateFile, JSON.stringify({ schemaVersion: 1, current: '0.1.5-rc.1',
       pending: { operation: 'reinstall', version: '0.1.5-rc.1' } }))
     await context.runtime.recover()
-    expect(await readFile(join(current, 'retained-marker'), 'utf8')).toBe('original')
-    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
+    expect(await readFile(join(root, 'replacement-backup', 'retained-marker'), 'utf8')).toBe('original')
+    expect(context.runtime.launch()).toBeUndefined()
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toEqual({ operation: 'reinstall', version: '0.1.5-rc.1' })
   }, 10_000)
+
+  it('restores only a transaction-identified backup after a promoted-but-uncommitted crash', async () => {
+    const context = await fixtures()
+    await context.runtime.recover()
+    await context.runtime.install()
+    const layout = managedHarnessLayout(root)
+    const version = '0.1.5-rc.1'
+    const target = layout.versionDirectory(version)
+    const oldMarker = JSON.parse(await readFile(join(target, '.dsh-desktop-managed.json'), 'utf8')) as { transactionId: string }
+    const txId = '22222222-2222-4222-8222-222222222222'
+    const backup = layout.backupDirectory(txId)
+    await mkdir(layout.backups, { recursive: true })
+    await writeFile(join(target, 'retained-marker'), 'original')
+    await rename(target, backup)
+    await materializeHarness(target, version)
+    await markDesktopManagedVersion(target, version, txId)
+    await writeFile(layout.stateFile, JSON.stringify({ schemaVersion: 1, current: version,
+      pending: { operation: 'reinstall', version, transactionId: txId, phase: 'promoted', backupInstallId: oldMarker.transactionId } }))
+
+    await context.runtime.recover()
+
+    await expect(readFile(join(target, 'retained-marker'), 'utf8')).resolves.toBe('original')
+    await expect(readdir(backup)).rejects.toThrow()
+    expect(context.runtime.launch()?.version).toBe(version)
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+  }, 10_000)
+
+  it.each(['staging', 'health'] as const)(
+    'preserves a committed journal when %s scratch ownership does not match and retries cleanup later', async (scratch) => {
+      const context = await fixtures()
+      await context.runtime.recover()
+      await context.runtime.install()
+      const layout = managedHarnessLayout(root)
+      const version = '0.1.5-rc.1'
+      const target = layout.versionDirectory(version)
+      const managed = JSON.parse(await readFile(join(target, '.dsh-desktop-managed.json'), 'utf8')) as { transactionId: string }
+      const transactionId = managed.transactionId
+      const scratchPath = scratch === 'staging' ? layout.stagingDirectory(transactionId) : layout.healthHome(transactionId)
+      const marker = scratch === 'staging' ? '.dsh-desktop-transaction.json' : '.dsh-desktop-health.json'
+      await mkdir(scratchPath, { recursive: true })
+      await writeFile(join(scratchPath, marker), JSON.stringify({ transactionId: '99999999-9999-4999-8999-999999999999' }))
+      await writeFile(layout.stateFile, JSON.stringify({ schemaVersion: 1, current: version,
+        pending: { operation: 'update', version, transactionId, phase: 'committed' } }))
+
+      await context.runtime.recover()
+
+      expect(context.runtime.launch()?.version).toBe(version)
+      expect(context.runtime.availability()).toEqual({ available: true })
+      expect(context.runtime.status()).toMatchObject({ phase: 'failed', reason: /scratch data.*recovery is deferred/iu })
+      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ transactionId, phase: 'committed' })
+      await expect(readFile(join(scratchPath, marker), 'utf8')).resolves.toContain('99999999')
+
+      await writeFile(join(scratchPath, marker), JSON.stringify({ transactionId }))
+      await context.runtime.recover()
+
+      expect(context.runtime.launch()?.version).toBe(version)
+      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+      await expect(readdir(scratchPath)).rejects.toThrow()
+    },
+  )
+
+  it('keeps an owned current install when a reinstall crashed before backup began', async () => {
+    const context = await fixtures()
+    await context.runtime.recover()
+    await context.runtime.install()
+    const layout = managedHarnessLayout(root)
+    const version = '0.1.5-rc.1'
+    const txId = '33333333-3333-4333-8333-333333333333'
+    const staging = layout.stagingDirectory(txId)
+    await mkdir(staging, { recursive: true })
+    await writeFile(join(staging, '.dsh-desktop-transaction.json'), JSON.stringify({ transactionId: txId }))
+    await writeFile(layout.stateFile, JSON.stringify({ schemaVersion: 1, current: version,
+      pending: { operation: 'reinstall', version, transactionId: txId, phase: 'verified' } }))
+
+    await context.runtime.recover()
+
+    expect(context.runtime.status()).toEqual({ phase: 'ready', current: version })
+    expect(context.runtime.launch()?.version).toBe(version)
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+    await expect(readdir(staging)).rejects.toThrow()
+  }, 10_000)
+
+  it.each(['backup-planned', 'backed-up', 'promoted'] as const)(
+    'blocks recovery when the expected previous install is missing in phase %s', async (phase) => {
+      const context = await fixtures()
+      await context.runtime.recover()
+      await context.runtime.install()
+      const layout = managedHarnessLayout(root)
+      const version = '0.1.5-rc.1'
+      const target = layout.versionDirectory(version)
+      const oldMarker = JSON.parse(await readFile(join(target, '.dsh-desktop-managed.json'), 'utf8')) as { transactionId: string }
+      const txId = '44444444-4444-4444-8444-444444444444'
+      if (phase === 'promoted') {
+        await rm(target, { recursive: true, force: false })
+        await materializeHarness(target, version)
+        await markDesktopManagedVersion(target, version, txId)
+      } else {
+        await rm(target, { recursive: true, force: false })
+      }
+      await writeFile(layout.stateFile, JSON.stringify({ schemaVersion: 1, current: version,
+        pending: { operation: 'reinstall', version, transactionId: txId, phase, backupInstallId: oldMarker.transactionId } }))
+
+      await context.runtime.recover()
+
+      expect(context.runtime.launch()).toBeUndefined()
+      expect(context.runtime.availability()).toEqual({ available: false, reason: 'not-installed' })
+      expect(context.runtime.status()).toMatchObject({ phase: 'failed', reason: /previous install/iu })
+      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ transactionId: txId, phase })
+      if (phase === 'promoted') await expect(readFile(join(target, '.dsh-desktop-managed.json'), 'utf8')).resolves.toContain(txId)
+    },
+  )
+
+  it('blocks launch if a reinstall loses its identified backup during cleanup', async () => {
+    const context = await fixtures()
+    await context.runtime.recover()
+    await context.runtime.install()
+    context.failAfterBackup = true
+
+    await expect(context.runtime.reinstall()).resolves.toMatchObject({ outcome: 'failed' })
+
+    const layout = managedHarnessLayout(root)
+    expect(context.runtime.launch()).toBeUndefined()
+    expect(context.runtime.availability()).toEqual({ available: false, reason: 'not-installed' })
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ phase: 'backed-up' })
+    await expect(readdir(layout.backups).then(entries => entries.length)).resolves.toBe(0)
+  })
+
+  it('preserves an unowned exact-version target collision during install', async () => {
+    const context = await fixtures()
+    const layout = managedHarnessLayout(root)
+    const target = layout.versionDirectory('0.1.5-rc.1')
+    await mkdir(target, { recursive: true })
+    await writeFile(join(target, 'human-backup.txt'), 'keep')
+
+    await expect(context.runtime.install()).resolves.toMatchObject({ outcome: 'failed' })
+
+    await expect(readFile(join(target, 'human-backup.txt'), 'utf8')).resolves.toBe('keep')
+    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+  })
+
+  it('keeps a legacy current install launchable when same-version reinstall lacks ownership proof', async () => {
+    const context = await fixtures()
+    await context.runtime.recover()
+    await context.runtime.install()
+    const layout = managedHarnessLayout(root)
+    await rm(join(layout.versionDirectory('0.1.5-rc.1'), '.dsh-desktop-managed.json'))
+
+    await expect(context.runtime.reinstall()).resolves.toMatchObject({
+      outcome: 'failed', reason: expect.stringMatching(/no trusted ownership marker/iu),
+    })
+    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
+
+    context.releases.push('0.1.5-rc.2')
+    await expect(context.runtime.update()).resolves.toEqual({ outcome: 'promoted', version: '0.1.5-rc.2' })
+    expect(context.runtime.launch()?.version).toBe('0.1.5-rc.2')
+    expect(context.runtime.retained()).toEqual({ current: '0.1.5-rc.2', previous: '0.1.5-rc.1' })
+  })
 })
 
 

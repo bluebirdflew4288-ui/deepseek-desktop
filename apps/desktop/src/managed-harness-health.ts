@@ -8,11 +8,12 @@
  * real Harness data, and a version that cannot boot is never switched to.
  */
 
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createHostSupervisor, spawnDshWeb, type HostSupervisor } from './host-supervisor.ts'
 import { describeFailure } from './managed-harness-log.ts'
 import { harnessCliEntry, type ManagedHarnessLayout } from './managed-harness-paths.ts'
 import { managedProcessEnvironment, parentBoundEnvironment } from './managed-harness-process.ts'
+import { readFile, lstat } from 'node:fs/promises'
 
 /** Bound on one health check's readiness wait. */
 const DEFAULT_HEALTH_READINESS_TIMEOUT_MS = 120_000
@@ -23,6 +24,7 @@ export interface HarnessHealthRequest {
   readonly versionDirectory: string
   /** Exact version, naming the disposable Harness home for this check. */
   readonly version: string
+  readonly transactionId: string
 }
 
 /** Outcome of one health check. It never carries the launch token. */
@@ -67,9 +69,16 @@ export function createHarnessHealthCheck(options: HarnessHealthCheckOptions): Ha
   const createSupervisor = options.createSupervisor ?? createHostSupervisor
   return {
     async check(request) {
-      const home = options.layout.healthHome(request.version)
-      await rm(home, { recursive: true, force: true })
-      await mkdir(home, { recursive: true, mode: 0o700 })
+      const home = options.layout.healthHome(request.transactionId)
+      try {
+        const metadata = await lstat(options.layout.health)
+        if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('managed Harness health root is not a real directory')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        await mkdir(options.layout.health, { recursive: false, mode: 0o700 })
+      }
+      await mkdir(home, { recursive: false, mode: 0o700 })
+      await writeFile(`${home}/.dsh-desktop-health.json`, JSON.stringify({ schemaVersion: 1, transactionId: request.transactionId }), { flag: 'wx', mode: 0o600 })
       const supervisor = createSupervisor({
         spawnHost: () => spawnDshWeb({
           nodeExecutable: options.nodeExecutable,
@@ -91,7 +100,13 @@ export function createHarnessHealthCheck(options: HarnessHealthCheckOptions): Ha
         return { healthy: false, failure: describeFailure(error) }
       } finally {
         await supervisor.shutdown().catch(() => undefined)
-        await rm(home, { recursive: true, force: true })
+        try {
+          const metadata = await lstat(home)
+          const marker = JSON.parse(await readFile(`${home}/.dsh-desktop-health.json`, 'utf8')) as { transactionId?: unknown }
+          if (metadata.isDirectory() && !metadata.isSymbolicLink() && marker.transactionId === request.transactionId) {
+            await rm(home, { recursive: true, force: false })
+          }
+        } catch { /* Preserve paths whose ownership cannot be proved. */ }
       }
     },
   }

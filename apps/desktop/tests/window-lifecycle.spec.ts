@@ -37,6 +37,17 @@ function fakeWindow(options: { destroyed?: boolean; visible?: boolean } = {}): F
 }
 
 describe('desktop window lifecycle', () => {
+  it('restores a minimized window before focusing it', async () => {
+    const restore = vi.fn()
+    const window = { ...fakeWindow(), isMinimized: () => true, restore }
+    const lifecycle = createDesktopLifecycle({
+      getWindow: () => window, createWindow: () => Promise.resolve(window),
+      disposeApplication: () => Promise.resolve(), quit: vi.fn(),
+    })
+    await lifecycle.showWindow()
+    expect(restore).toHaveBeenCalledOnce()
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(window.focus.mock.invocationCallOrder[0]!)
+  })
   it('hides an ordinary close without disposing the application', () => {
     const window = fakeWindow()
     const preventDefault = vi.fn()

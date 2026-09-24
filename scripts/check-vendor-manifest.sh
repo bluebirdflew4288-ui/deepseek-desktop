@@ -23,7 +23,7 @@ fi
 # why nothing has to take it on trust. The Commit column is deliberately not
 # checked here: no local source can prove an upstream revision.
 manifest_rows=$(awk -F'|' '
-  /^\| `[a-z0-9-]+\/\` \|/ {
+  /^\| `[a-z0-9-]+\/` \|/ {
     dir = $2; ver = $5
     gsub(/[`[:space:]]/, "", dir); sub(/\/$/, "", dir)
     gsub(/[[:space:]]/, "", ver)

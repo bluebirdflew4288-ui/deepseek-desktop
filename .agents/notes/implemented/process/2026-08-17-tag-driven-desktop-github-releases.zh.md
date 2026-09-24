@@ -12,13 +12,15 @@ Status: implemented
 
 ## 决策
 
-`.github/workflows/desktop-release.yml` 负责桌面 GitHub Releases。推送 `vX.Y.Z` 标签会启动一个原生 macOS Apple Silicon 任务和一个原生 Windows x64 任务。每个任务都会执行不可变安装、确认标签与 `apps/desktop/package.json` 一致、确认 runner 架构、构建仓库、暂存 Host 运行时，并让 Electron Builder 生成可分发文件。
+`.github/workflows/desktop-release.yml` 负责桌面 GitHub Releases。推送 `vX.Y.Z` 标签后，工作流先确认标签与 `apps/desktop/package.json` 精确一致，且标签提交位于 `origin/main` 历史中，再启动原生 macOS Apple Silicon 与 Windows x64 构建。每个任务都会执行不可变安装、确认 runner 架构、构建仓库、暂存固定版本的 npm 运行时，并生成只列出声明产物的清单。Desktop 仍为 `1.0.5`；工作流不会修改版本号。
 
-macOS 任务生成未签名的 DMG 和 ZIP 文件。Windows 任务生成未签名的 NSIS 和 ZIP 文件。每个任务只上传这些可分发格式；未封装目录和更新元数据不会进入 Release。Release 任务获得 `contents: write`，构建任务保持只读仓库权限；它等待两端构建完成后创建带标签的 GitHub Release。重新运行时会用 `--clobber` 上传同名文件，而不会创建另一个 Release。
+macOS Apple Silicon 任务生成仅带 ad hoc 签名的 DMG 与 ZIP；它们没有 Developer ID 分发签名，也未公证。Windows x64 任务在运行 Electron Builder 前，要求提供 PFX、密码、预期完整证书 Subject 和 RFC 3161 时间戳服务器。`forceCodeSigning` 会让缺少签名时构建失败。上传前，Authenticode 校验会检查安装程序和封装后的应用可执行文件：要求可信证书链有效、完整 Subject 精确匹配、时间戳证书包含 time-stamping EKU，并且 `signtool verify /pa /all /v` 成功。PFX 与密码只在该构建步骤可用，不会进入产物或日志。
 
-桌面包携带独立的 `1.0.0` 应用版本。它不会改变 Harness NPM 包族共享的预发布版本；该包族的 `dsh-v*` 标签和注册表发布仍然独立。
+每个平台上传一份清单以及清单声明的 DMG/ZIP 或 NSIS/ZIP 文件。工作流不生成或上传更新元数据。Release 任务获得 `contents: write`，构建任务保持只读仓库权限。它会先创建 draft，再按 SHA-256 对照四个清单产物；同名且哈希相同的文件会跳过，同名但哈希不同则失败。工作流绝不使用 `--clobber`，清单之外的既有资产保持不变；校验哈希与来源提交后才发布 draft。已发布的 Release 仅在来源提交及所有声明哈希都吻合时视为无操作；缺失或不同的资产会导致安全失败。
 
-公开仓库没有分发凭据，因此工作流显式关闭 macOS 签名和公证。经过凭据校验的本地 macOS 命令仍负责生成已签名且经过公证的 DMG。
+桌面包携带独立的 `1.0.5` 应用版本。它不会改变 Harness NPM 包族共享的预发布版本；该包族的 `dsh-v*` 标签和注册表发布仍然独立。
+
+工作流不会声称 macOS 产物已完成 Developer ID 签名或公证。目前尚未配置 Windows 发布签名凭据、预期 Publisher 和时间戳设置，因此 Windows 任务会在生成发布产物前按设计失败。未签名的 Windows 1.0.5 本地试用版不是发布候选。
 
 ## 曾考虑的替代方案
 
@@ -26,8 +28,8 @@ macOS 任务生成未签名的 DMG 和 ZIP 文件。Windows 任务生成未签�
 
 **只发布未封装的应用目录。** 目录适合本地验证，但不便作为 GitHub Release 下载。DMG、NSIS 和 ZIP 同时覆盖安装与便携检查，又无需提交生成输出。
 
-**首次公开发布前必须完成签名。** 当前未配置 Apple 或 Windows 签名凭据。在凭据存在前让工作流始终失败不会提供任何可下载版本；静默尝试签名则可能生成不一致结果。产物被明确标记为未签名，文档也说明了这一限制。
+**凭据配置前先发布未签名 Windows 版本。** 不采纳，因为未签名安装程序无法确认预期 Publisher，可能误导用户。可信签名输入配置完成前，工作流会阻止发布。
 
 ## 后果
 
-任一平台开始构建前，标签必须与桌面包版本一致。任一平台失败都会阻止创建 Release，因此已发布的 Release 总是包含两个受支持桌面目标。由于产物未签名，用户可能遇到操作系统警告。增加 Windows 签名或自动 Apple 签名需要单独决定凭据与信任方案，而不是扩大构建任务权限。
+标签必须与桌面包版本一致并位于 `main` 历史中。任一平台失败都会阻止发布，因此 Release 总是包含两个声明目标。macOS 仍是 ad hoc 签名且未公证；Windows 必须通过可信 Authenticode 与时间戳验证。Windows 签名密钥只对一个构建步骤可见，Release 修改权限仍隔离在 Release 任务中。
