@@ -8,12 +8,23 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { build } from 'electron-builder'
 import { expectedDesktopAssetNames } from './release-assets.ts'
+import { verifyWindowsPackagedRuntime } from './verify-packaged-runtime.ts'
 
 export interface WindowsReleaseSigningInputs {
   readonly pfxBase64: string
   readonly password: string
   readonly publisher: string
   readonly timestampServer: string
+}
+
+/** Complete the post-build verification only after the builder succeeds. */
+export async function buildThenVerifyWindowsPackage<T>(
+  buildPackage: () => Promise<T>,
+  verifyPackage: () => Promise<void>,
+): Promise<T> {
+  const result = await buildPackage()
+  await verifyPackage()
+  return result
 }
 
 function requiredEnvironment(env: NodeJS.ProcessEnv, name: string): string {
@@ -108,6 +119,7 @@ export async function buildSignedWindowsRelease(env: NodeJS.ProcessEnv): Promise
   if (typeof metadata.version !== 'string' || typeof metadata.build?.productName !== 'string') {
     throw new Error('Desktop package version or product name is unavailable')
   }
+  const productFilename = metadata.build.productName
   const pfxPath = join(env.RUNNER_TEMP ?? tmpdir(), `desktop-signing-${randomUUID()}.p12`)
   writeFileSync(pfxPath, Buffer.from(inputs.pfxBase64, 'base64'), { flag: 'wx', mode: 0o600 })
   const priorCscLink = process.env.CSC_LINK
@@ -121,13 +133,16 @@ export async function buildSignedWindowsRelease(env: NodeJS.ProcessEnv): Promise
     process.env.CSC_KEY_PASSWORD = inputs.password
     delete process.env.WINDOWS_CERTIFICATE_PFX_BASE64
     delete process.env.WINDOWS_CERTIFICATE_PASSWORD
-    await build({
-      projectDir: process.cwd(),
-      win: ['nsis', 'zip'],
-      x64: true,
-      publish: 'never',
-      config: windowsReleaseBuilderConfig(inputs),
-    })
+    await buildThenVerifyWindowsPackage(
+      () => build({
+        projectDir: process.cwd(),
+        win: ['nsis', 'zip'],
+        x64: true,
+        publish: 'never',
+        config: windowsReleaseBuilderConfig(inputs),
+      }),
+      () => verifyWindowsPackagedRuntime(resolve('dist', 'win-unpacked'), productFilename),
+    )
 
     // The verification process does not inherit the PFX, certificate password,
     // or Electron Builder credential aliases.

@@ -12,10 +12,10 @@
     "dev": "pnpm --workspace-root run build && electron .",
     "materialize:electron": "node node_modules/electron/install.js",
     "stage:npm": "node --import tsx scripts/stage-npm.ts",
-    "package": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --dir",
-    "dist": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder",
+    "package": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --dir && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build-if-windows",
+    "dist": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build-if-windows",
     "dist:mac": "node --import tsx scripts/release-mac.ts",
-    "dist:win": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --win nsis zip --x64 --publish never"
+    "dist:win": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --win nsis zip --x64 --publish never && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build"
   },
   "license": "MIT",
   "dependencies": {

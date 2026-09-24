@@ -1,8 +1,12 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { verifyPackagedRuntime } from '../scripts/verify-packaged-runtime.ts'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  verifyPackagedRuntime,
+  verifyWindowsPackagedRuntime,
+  verifyWindowsPackagedRuntimeForPlatform,
+} from '../scripts/verify-packaged-runtime.ts'
 
 const desktopRoot = resolve(import.meta.dirname, '..')
 
@@ -87,13 +91,43 @@ async function stagedNpm(options: { version?: string; bundled?: boolean } = {}):
 }
 
 describe('packaged desktop runtime verification', () => {
-  it.runIf(process.platform === 'win32')('executes the Windows binary and rejects a broken npm CLI', async () => {
+  it('runs the Windows post-build check only on Windows', async () => {
+    const verify = vi.fn(async () => undefined)
+
+    await verifyWindowsPackagedRuntimeForPlatform('win32', verify)
+    await verifyWindowsPackagedRuntimeForPlatform('darwin', verify)
+    await verifyWindowsPackagedRuntimeForPlatform('linux', verify)
+
+    expect(verify).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not execute the Windows binary during afterPack before resource editing', async () => {
     const { appOutDir } = await packagedApp('win32')
     const stagedRoot = await stagedNpm()
     try {
-      await copyFile(process.execPath, join(appOutDir, 'DeepSeek Desktop.exe'))
-      await writeFile(join(stagedRoot, 'npm', 'bin', 'npm-cli.js'), 'process.exit(17)')
-      await expect(verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)).rejects.toThrow(/did not execute/)
+      await writeFile(join(appOutDir, 'DeepSeek Desktop.exe'), 'not yet resource-edited')
+      await expect(verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)).resolves.toBeUndefined()
+    } finally {
+      await rm(appOutDir, { recursive: true, force: true })
+      await rm(stagedRoot, { recursive: true, force: true })
+    }
+  })
+
+  it.runIf(process.platform === 'win32')('executes the packaged Windows binary after the build and rejects a broken npm CLI', async () => {
+    const { appOutDir } = await packagedApp('win32')
+    const stagedRoot = await stagedNpm()
+    const electronExe = resolve(desktopRoot, 'node_modules/electron/dist/electron.exe')
+    try {
+      await copyFile(electronExe, join(appOutDir, 'DeepSeek Desktop.exe'))
+      for (const runtimeFile of ['icudtl.dat', 'resources.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin']) {
+        await copyFile(resolve(desktopRoot, 'node_modules/electron/dist', runtimeFile), join(appOutDir, runtimeFile))
+      }
+      await verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)
+      const packagedNpmCli = join(appOutDir, 'resources', 'npm', 'bin', 'npm-cli.js')
+      await writeFile(packagedNpmCli, `process.stdout.write('${(await pin()).version}')`)
+      await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).resolves.toBeUndefined()
+      await writeFile(packagedNpmCli, 'process.exit(17)')
+      await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).rejects.toThrow(/did not execute/)
     } finally {
       await rm(appOutDir, { recursive: true, force: true })
       await rm(stagedRoot, { recursive: true, force: true })
@@ -123,6 +157,18 @@ describe('packaged desktop runtime verification', () => {
     const stagedRoot = await stagedNpm()
     try {
       await expect(verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)).resolves.toBeUndefined()
+    } finally {
+      await rm(appOutDir, { recursive: true, force: true })
+      await rm(stagedRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when post-build verification cannot find the Windows executable', async () => {
+    const { appOutDir } = await packagedApp('win32')
+    const stagedRoot = await stagedNpm()
+    try {
+      await verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)
+      await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).rejects.toThrow()
     } finally {
       await rm(appOutDir, { recursive: true, force: true })
       await rm(stagedRoot, { recursive: true, force: true })

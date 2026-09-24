@@ -69,7 +69,7 @@ Harness 提供官方 WebUI 以及工作区、智能体和工具能力。请独�
 
 ## 安装
 
-人工验收覆盖 macOS Apple Silicon 开发构建。本衍生项目尚无公开稳定版本。发布工作流要求可信的 Windows x64 Authenticode 证书；只有安装程序与应用可执行文件均通过证书链校验、配置的完整证书 Subject 精确匹配且带有可信 RFC 3161 时间戳时才会继续。目前没有配置 Windows 签名凭据，因此发布会安全失败。macOS 发布产物仅使用 ad hoc 签名；未使用 Developer ID 分发签名，也未公证。用户已接受未签名的 Windows x64 1.0.5 本地试用构建（含原生菜单、托盘行为与通知），但该验收仅适用于此前已安装的构建。最新源码通过了 `pnpm run build`，但两次独立打包预检都在 `resEdit` 写入时遇到 `EBUSY`，未生成新安装器或 ZIP；最新源码的安装与运行验证仍未完成。Linux Desktop 安装包不是当前发布目标。
+人工验收覆盖 macOS Apple Silicon 开发构建。本衍生项目尚无公开稳定版本。发布工作流要求可信的 Windows x64 Authenticode 证书；只有安装程序与应用可执行文件均通过证书链校验、配置的完整证书 Subject 精确匹配且带有可信 RFC 3161 时间戳时才会继续。目前没有配置 Windows 签名凭据，因此发布会安全失败。macOS 发布产物仅使用 ad hoc 签名；未使用 Developer ID 分发签名，也未公证。用户已接受此前安装的未签名 Windows x64 1.0.5 本地试用构建（含原生菜单、托盘行为与通知）；该验收仅适用于那个已安装版本。最新源码通过 `pnpm run build`。2026-09-24 的两次独立打包预检都在 `resEdit` 写入时遇到 `EBUSY`；将 Windows npm 执行移出 `afterPack` 后，2026-09-25 的完整 Windows x64 NSIS/ZIP 构建及打包后 npm 运行时验证均通过。生成的安装程序与应用可执行文件均为 `NotSigned`：当前没有可信签名证书，也没有正式签名或 GitHub Release。当前源码包尚未安装，其应用启动、Harness 与 Chat 均未验证。Linux Desktop 安装包不是当前发布目标。
 
 ### 打包应用用户
 

@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   assertAuthenticodeEvidence,
   assertWindowsReleaseSigningInputs,
+  buildThenVerifyWindowsPackage,
   windowsReleaseBuilderConfig,
   type AuthenticodeEvidence,
 } from '../scripts/windows-release-build.ts'
@@ -28,6 +29,28 @@ const VALID_EVIDENCE: AuthenticodeEvidence = {
 const authenticodeScript = readFileSync(resolve(fileURLToPath(new URL('../scripts/verify-windows-authenticode.ps1', import.meta.url))), 'utf8')
 
 describe('Windows release signing gate', () => {
+  it('verifies the packaged runtime only after the builder succeeds', async () => {
+    const steps: string[] = []
+
+    await buildThenVerifyWindowsPackage(
+      async () => { steps.push('build') },
+      async () => { steps.push('verify') },
+    )
+
+    expect(steps).toEqual(['build', 'verify'])
+  })
+
+  it('does not verify a package when the builder fails', async () => {
+    const verify = vi.fn(async () => undefined)
+
+    await expect(buildThenVerifyWindowsPackage(
+      async () => { throw new Error('builder failed') },
+      verify,
+    )).rejects.toThrow('builder failed')
+
+    expect(verify).not.toHaveBeenCalled()
+  })
+
   it('accepts complete, well-formed signing inputs without exposing their values', () => {
     expect(assertWindowsReleaseSigningInputs(READY)).toEqual({
       pfxBase64: PFX,
@@ -70,14 +93,14 @@ describe('Windows release signing gate', () => {
   })
 
   it('requires valid Authenticode trust, exact full Subject, and trusted timestamp evidence', () => {
-    expect(() => assertAuthenticodeEvidence(VALID_EVIDENCE, READY.WINDOWS_EXPECTED_PUBLISHER)).not.toThrow()
-    expect(() => assertAuthenticodeEvidence({ ...VALID_EVIDENCE, status: 'NotSigned' }, READY.WINDOWS_EXPECTED_PUBLISHER))
+    expect(() => { assertAuthenticodeEvidence(VALID_EVIDENCE, READY.WINDOWS_EXPECTED_PUBLISHER) }).not.toThrow()
+    expect(() => { assertAuthenticodeEvidence({ ...VALID_EVIDENCE, status: 'NotSigned' }, READY.WINDOWS_EXPECTED_PUBLISHER) })
       .toThrow('chain verification failed')
-    expect(() => assertAuthenticodeEvidence({ ...VALID_EVIDENCE, signerSubject: 'CN=Different Publisher' }, READY.WINDOWS_EXPECTED_PUBLISHER))
+    expect(() => { assertAuthenticodeEvidence({ ...VALID_EVIDENCE, signerSubject: 'CN=Different Publisher' }, READY.WINDOWS_EXPECTED_PUBLISHER) })
       .toThrow('does not exactly match')
-    expect(() => assertAuthenticodeEvidence({ ...VALID_EVIDENCE, timestampSubject: null }, READY.WINDOWS_EXPECTED_PUBLISHER))
+    expect(() => { assertAuthenticodeEvidence({ ...VALID_EVIDENCE, timestampSubject: null }, READY.WINDOWS_EXPECTED_PUBLISHER) })
       .toThrow(/RFC 3161.*timestamp/iu)
-    expect(() => assertAuthenticodeEvidence({ ...VALID_EVIDENCE, trustedChain: false }, READY.WINDOWS_EXPECTED_PUBLISHER))
+    expect(() => { assertAuthenticodeEvidence({ ...VALID_EVIDENCE, trustedChain: false }, READY.WINDOWS_EXPECTED_PUBLISHER) })
       .toThrow('chain verification failed')
   })
 

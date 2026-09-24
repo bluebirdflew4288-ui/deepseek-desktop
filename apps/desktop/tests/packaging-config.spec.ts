@@ -161,6 +161,25 @@ describe('desktop packaging configuration', () => {
     expect(desktopPackage.scripts.package).not.toContain('release-preflight.ts')
   })
 
+  it('verifies the Windows packaged npm runtime only after Electron Builder exits successfully', () => {
+    const command = desktopPackage.scripts['dist:win']
+    if (command === undefined) throw new Error('missing desktop dist:win script')
+    const builder = 'electron-builder --win nsis zip --x64 --publish never'
+    const verifier = 'node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build'
+
+    expect(command).toContain(`${builder} && ${verifier}`)
+    expect(command.indexOf(builder)).toBeLessThan(command.indexOf(verifier))
+  })
+
+  it.each(['package', 'dist'])('adds the conditional post-build runtime check to the generic %s entrypoint', (name) => {
+    const command = desktopPackage.scripts[name]
+    if (command === undefined) throw new Error(`missing desktop ${name} script`)
+    const verifier = 'node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build-if-windows'
+
+    expect(command).toContain(`&& ${verifier}`)
+    expect(command.indexOf('electron-builder')).toBeLessThan(command.indexOf(verifier))
+  })
+
   it('makes the macOS DMG path signed, hardened, and notarized', () => {
     const command = desktopPackage.scripts['dist:mac']
 

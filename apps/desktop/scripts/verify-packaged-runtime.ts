@@ -3,10 +3,11 @@
  * runtime.
  */
 
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { AfterPackContext } from 'electron-builder'
-import { assertNpmRuntime, placeNpmRuntime } from './packaged-npm-runtime.ts'
+import { fileURLToPath } from 'node:url'
+import { assertNpmRuntime, placeNpmRuntime, readNpmRuntimePin } from './packaged-npm-runtime.ts'
 
 const REQUIRED_SHELL_FILES = [
   ['desktop-resources', 'shell.html'],
@@ -63,7 +64,46 @@ export async function verifyPackagedRuntime(context: AfterPackContext, stagedNpm
     await access(join(resources, ...segments))
   }
   const pin = await placeNpmRuntime(resources, stagedNpmRoot)
-  await assertNpmRuntime(resources, pin, electronExecutable(context))
+  // Windows Electron Builder edits/signs the main executable after `afterPack`.
+  // Do not open that executable until all artifacts have been built.
+  const executable = context.electronPlatformName === 'win32' ? undefined : electronExecutable(context)
+  await assertNpmRuntime(resources, pin, executable)
+}
+
+/**
+ * Verify the Windows npm runtime after Electron Builder has completed resource
+ * editing and produced its artifacts.
+ * @param appOutDir - completed `win-unpacked` application directory.
+ * @param productFilename - Electron Builder's normalized product filename.
+ * @returns A promise that rejects when the packaged npm runtime cannot execute.
+ */
+export async function verifyWindowsPackagedRuntime(appOutDir: string, productFilename: string): Promise<void> {
+  const resources = join(appOutDir, 'resources')
+  for (const segments of REQUIRED_SHELL_FILES) {
+    await access(join(resources, ...segments))
+  }
+  const pin = await readNpmRuntimePin()
+  const executable = join(appOutDir, `${productFilename}.exe`)
+  await access(executable)
+  await assertNpmRuntime(resources, pin, executable)
+}
+
+async function verifyWindowsPackagedRuntimeFromDesktopRoot(): Promise<void> {
+  const metadata = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as {
+    build?: { productName?: unknown }
+  }
+  if (typeof metadata.build?.productName !== 'string') {
+    throw new Error('Desktop product name is unavailable for post-build npm verification')
+  }
+  await verifyWindowsPackagedRuntime(resolve('dist', 'win-unpacked'), metadata.build.productName)
+}
+
+/** Run a Windows-only post-build check without changing generic macOS/Linux builds. */
+export async function verifyWindowsPackagedRuntimeForPlatform(
+  platform: NodeJS.Platform,
+  verify: () => Promise<void>,
+): Promise<void> {
+  if (platform === 'win32') await verify()
 }
 
 /**
@@ -76,3 +116,19 @@ export async function afterPack(context: AfterPackContext): Promise<void> {
 }
 
 export default afterPack
+
+const invokedPath = process.argv[1]
+const postBuildMode = process.argv[2]
+if (
+  invokedPath !== undefined
+  && resolve(invokedPath) === fileURLToPath(import.meta.url)
+  && (postBuildMode === '--windows-post-build' || postBuildMode === '--windows-post-build-if-windows')
+) {
+  const verification = postBuildMode === '--windows-post-build'
+    ? verifyWindowsPackagedRuntimeFromDesktopRoot()
+    : verifyWindowsPackagedRuntimeForPlatform(process.platform, verifyWindowsPackagedRuntimeFromDesktopRoot)
+  void verification.catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : 'Windows packaged npm verification failed')
+    process.exitCode = 1
+  })
+}
