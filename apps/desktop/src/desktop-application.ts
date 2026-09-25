@@ -63,8 +63,8 @@ import {
 import { createDesktopLifecycle } from './window-lifecycle.ts'
 
 import {
-  isNotificationAccent, createDesktopNotifications, DEFAULT_NOTIFICATION_PREFERENCES,
-  type DesktopTaskEvent, type DesktopNotificationAdapter, type NotificationPreferences,
+  isNotificationAccent, createDesktopNotifications, DEFAULT_NOTIFICATION_PREFERENCES, isSourceViewed,
+  type DesktopTaskEvent, type DesktopTaskVisibility, type DesktopNotificationAdapter, type NotificationPreferences,
 } from './desktop-notifications.ts'
 
 const APP_NAME = 'DeepSeek Desktop'
@@ -258,6 +258,23 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
   let chromeSurface: DesktopChromeSurface = 'closed'
   let harnessUpdateView: DesktopHarnessUpdateView | undefined
   let selectedMode: DesktopMode = 'harness'
+  // Application-scoped rather than per native window: a recreated window keeps the
+  // one notification owner that closes over these three.
+  // Whether the window has been out of the foreground since it was last genuinely
+  // visible. The first foreground after launch is not a return, so a mode startup
+  // restored keeps the reminder the previous run left behind.
+  let returnedFromBackground = false
+  // Raised while a notification click restores the window, whose source is selected
+  // only after that restore.
+  let acknowledgingFromNotification = false
+  // The one positive-visibility evidence, read both to decide what the user is
+  // looking at and to detect a return to the foreground.
+  const visibility = (): DesktopTaskVisibility => ({
+    focused: window?.isFocused() === true,
+    visible: window?.isVisible() === true,
+    minimized: window?.isMinimized() !== false,
+    source: selectedMode,
+  })
   let systemScheme = options.systemTheme.getColorScheme()
   let harnessScheme: DesktopColorScheme | undefined
   let themeCoordinator: DesktopThemeCoordinator | undefined
@@ -684,12 +701,7 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     }
     notifications ??= createDesktopNotifications({
       initial: desktopState.notifications ?? { preferences: DEFAULT_NOTIFICATION_PREFERENCES, events: [] },
-      visibility: () => ({
-        focused: window?.isFocused() === true,
-        visible: window?.isVisible() === true,
-        minimized: window?.isMinimized() !== false,
-        source: selectedMode,
-      }),
+      visibility,
       save: async (state) => {
         const next = { ...desktopState, notifications: state }
         desktopState = next
@@ -703,12 +715,20 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
       },
       adapter: options.notificationAdapter ?? { supported: () => false, show: () => {}, setDockBadge: () => {}, dispose: () => {} },
       open: async (event) => {
-        if (window?.isMinimized()) window.restore()
-        await lifecycle.showWindow()
-        await controller?.select(event.source)
-        await notifications?.viewed()
-        // Following a notification into a source is the second explicit entry.
-        await notifications?.enterSource(event.source)
+        // The window is restored before its source is selected, so a foreground edge
+        // taken inside this sequence would acknowledge whichever surface is still on
+        // screen. The explicit entry below acknowledges the notification's source.
+        acknowledgingFromNotification = true
+        try {
+          if (window?.isMinimized()) window.restore()
+          await lifecycle.showWindow()
+          await controller?.select(event.source)
+          await notifications?.viewed()
+          // Following a notification into a source is the second explicit entry.
+          await notifications?.enterSource(event.source)
+        } finally {
+          acknowledgingFromNotification = false
+        }
       },
       reportError,
     })
@@ -792,7 +812,17 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     })
     window = nativeWindow
     bindCommandW(nativeWindow.webContents)
-    const onVisibility = (): void => { void notifications?.viewed().catch(reportError) }
+    const onVisibility = (): void => {
+      // Coming back to the foreground with one source already on screen is that
+      // source's acknowledgement, because its reminder was raised while the surface
+      // was out of sight. Only the source on screen is entered, so a reminder
+      // belonging to the other source survives and the Dock number is recomputed.
+      const foreground = isSourceViewed(selectedMode, visibility())
+      const acknowledgeReturn = foreground && returnedFromBackground && !acknowledgingFromNotification
+      returnedFromBackground = !foreground
+      if (acknowledgeReturn) void notifications?.enterSource(selectedMode).catch(reportError)
+      void notifications?.viewed().catch(reportError)
+    }
     nativeWindow.on('focus', onVisibility)
     windowListenerDisposers.push(() => { nativeWindow.off('focus', onVisibility) })
     nativeWindow.on('blur', onVisibility)

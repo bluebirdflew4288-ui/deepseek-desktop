@@ -13,6 +13,11 @@ import type {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDesktopApplication } from '../src/desktop-application.ts'
 import { HARNESS_UPDATE_RADIUS } from '../src/desktop-chrome-layout.ts'
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  type DesktopNotificationAdapter,
+  type DesktopTaskEvent,
+} from '../src/desktop-notifications.ts'
 import type { DesktopColorScheme, DesktopSystemTheme } from '../src/desktop-theme.ts'
 import { DESKTOP_THEME_CHANNELS } from '../src/desktop-theme-sync.ts'
 import type { HostReadiness, HostSupervisor } from '../src/host-supervisor.ts'
@@ -102,9 +107,11 @@ class FakeWindow extends FakeEmitter {
     removeChildView: vi.fn(),
   }
   readonly loadFile = vi.fn(async () => { queueMicrotask(() => { this.emit('ready-to-show') }) })
-  readonly show = vi.fn(() => { this.visible = true })
-  readonly focus = vi.fn()
-  readonly hide = vi.fn(() => { this.visible = false })
+  // Real restores emit the platform events, not just the state change, so the
+  // foreground listeners see the same sequence here as under Electron.
+  readonly show = vi.fn(() => { this.visible = true; this.emit('show') })
+  readonly focus = vi.fn(() => { this.emit('focus') })
+  readonly hide = vi.fn(() => { this.visible = false; this.emit('hide') })
   readonly getContentBounds = vi.fn(() => ({ x: 20, y: 30, width: 1200, height: 800 }))
 
   constructor() {
@@ -192,6 +199,7 @@ function applicationOptions(input: {
   readonly quit?: () => void
   readonly reportError?: (error: unknown) => void
   readonly systemTheme?: DesktopSystemTheme
+  readonly notificationAdapter?: DesktopNotificationAdapter
 }) {
   const ipc = input.ipc ?? new FakeIpc()
   const order = input.order ?? []
@@ -206,6 +214,7 @@ function applicationOptions(input: {
       harnessThemePreloadPath: '/app/lib/harness-theme-preload.cjs',
       chatThemePreloadPath: '/app/lib/chat-theme-preload.cjs',
       platform: input.platform ?? 'darwin',
+      ...input.notificationAdapter === undefined ? {} : { notificationAdapter: input.notificationAdapter },
       createWindow: vi.fn((_options: BrowserWindowConstructorOptions) => input.window as unknown as BrowserWindow),
       createView: vi.fn((_options: WebContentsViewConstructorOptions) => {
         const view = input.views.shift()
@@ -499,6 +508,181 @@ describe('desktop application composition', () => {
     await vi.waitFor(() => { expect(application.snapshot()?.chat).toEqual({ phase: 'failed', message: clearFailure.message }) })
     expect(application.snapshot()?.harness.phase).toBe('ready')
     expect(quit).not.toHaveBeenCalled()
+  })
+})
+
+describe('foreground attention acknowledgement', () => {
+  /** Durable attention exactly as the Dock and the two dots read it. */
+  async function persistedAttention(filename: string) {
+    const raw = await readFile(filename, 'utf8').catch(() => undefined)
+    const ledger = raw === undefined
+      ? undefined
+      : (JSON.parse(raw) as { notifications?: { chatAttention?: boolean; harnessAttention?: boolean } }).notifications
+    return { chat: ledger?.chatAttention === true, harness: ledger?.harnessAttention === true }
+  }
+
+  function notifications() {
+    const clicks = new Map<string, () => void>()
+    const badges: number[] = []
+    const adapter: DesktopNotificationAdapter = {
+      supported: () => true,
+      show: (event, click) => { clicks.set(event.source, click) },
+      setDockBadge: (count) => { badges.push(count) },
+      dispose: () => {},
+    }
+    return {
+      adapter, clicks, badges,
+      shown: () => clicks.size,
+      badge: () => badges.at(-1),
+    }
+  }
+
+  /**
+   * Compose a desktop whose Dock number and notification clicks the test can read.
+   * @param input.mode - Surface left on screen, which defaults to Harness.
+   * @param input.reminder - Durable attention a previous run left behind, for the
+   *   startup case. An empty document is written when it is absent.
+   * @returns The application, its fake window, and the notification observation.
+   */
+  async function foregrounded(input: { mode?: 'chat' | 'harness'; reminder?: Record<string, unknown> } = {}) {
+    const filename = await stateFile()
+    const mode = input.mode ?? 'harness'
+    await writeFile(filename, JSON.stringify({
+      version: 2, mode,
+      notifications: { preferences: DEFAULT_NOTIFICATION_PREFERENCES, events: [], ...input.reminder },
+    }))
+    const window = new FakeWindow()
+    const chrome = fakeView()
+    const host = fakeHost(() => Promise.resolve({ origin: 'http://127.0.0.1:4173' }))
+    const note = notifications()
+    const { options } = applicationOptions({
+      stateFile: filename,
+      window,
+      views: [chrome.view, fakeView().view, fakeView().view, fakeView().view],
+      host,
+      notificationAdapter: note.adapter,
+    })
+    const application = createDesktopApplication(options)
+    await application.start()
+    // The surface on screen is what a return acknowledges, so a test must not raise
+    // an occurrence before the restored mode is the one the desktop reports.
+    await vi.waitFor(() => { expect(application.snapshot()?.selected).toBe(mode) })
+    return { application, window, note, filename }
+  }
+
+  /** One unseen Chat reply, as the audited completion observer reports it. */
+  const unseenChat = (id: string): DesktopTaskEvent =>
+    ({ id, source: 'chat', kind: 'completed', occurredAt: 1, topLevel: true, presentation: 'background-only' })
+  /** One unseen top-level Harness outcome, as the audited poller reports it. */
+  const unseenHarness = (id: string): DesktopTaskEvent =>
+    ({ id, source: 'harness', kind: 'completed', targetId: 'root', occurredAt: 1, topLevel: true, presentation: 'background-only' })
+
+  it('keeps a reminder restored by startup, because no return happened yet', async () => {
+    const { window, note, filename } = await foregrounded({
+      reminder: { harnessAttention: true, harnessPendingCount: 2 },
+    })
+    // Startup reveals and focuses the window: the Dock number is restored, and the
+    // reminder a previous run left behind survives that first foreground.
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(note.badge()).toBe(2)
+    expect(await persistedAttention(filename)).toEqual({ chat: false, harness: true })
+  })
+
+  it('clears only Chat when the app returns to the foreground on Chat', async () => {
+    const { application, window, note, filename } = await foregrounded({ mode: 'chat' })
+    window.hide()
+    await application.receiveTaskEvent(unseenChat('c1'))
+    await vi.waitFor(() => { expect(note.badge()).toBe(1) })
+    expect(await persistedAttention(filename)).toEqual({ chat: true, harness: false })
+
+    window.show()
+    await vi.waitFor(async () => { expect(await persistedAttention(filename)).toEqual({ chat: false, harness: false }) })
+    expect(note.badge()).toBe(0)
+  })
+
+  it('clears only Harness when the app returns to the foreground on Harness', async () => {
+    const { application, window, note, filename } = await foregrounded()
+    window.hide()
+    await application.receiveTaskEvent(unseenHarness('h1'))
+    await vi.waitFor(() => { expect(note.badge()).toBe(1) })
+    expect(await persistedAttention(filename)).toEqual({ chat: false, harness: true })
+
+    window.show()
+    await vi.waitFor(async () => { expect(await persistedAttention(filename)).toEqual({ chat: false, harness: false }) })
+    expect(note.badge()).toBe(0)
+  })
+
+  it('acknowledges the visible source and keeps the other one at one', async () => {
+    const chatOnScreen = await foregrounded({ mode: 'chat' })
+    chatOnScreen.window.hide()
+    await chatOnScreen.application.receiveTaskEvent(unseenChat('c1'))
+    await chatOnScreen.application.receiveTaskEvent(unseenHarness('h1'))
+    await vi.waitFor(() => { expect(chatOnScreen.note.badge()).toBe(2) })
+
+    // Returning to Chat is not returning to Harness: the Dock number is recomputed
+    // from what remains, so it falls to one instead of reaching zero.
+    chatOnScreen.window.show()
+    await vi.waitFor(async () => {
+      expect(await persistedAttention(chatOnScreen.filename)).toEqual({ chat: false, harness: true })
+    })
+    expect(chatOnScreen.note.badge()).toBe(1)
+
+    const harnessOnScreen = await foregrounded()
+    harnessOnScreen.window.hide()
+    await harnessOnScreen.application.receiveTaskEvent(unseenChat('c1'))
+    await harnessOnScreen.application.receiveTaskEvent(unseenHarness('h1'))
+    await vi.waitFor(() => { expect(harnessOnScreen.note.badge()).toBe(2) })
+
+    harnessOnScreen.window.show()
+    await vi.waitFor(async () => {
+      expect(await persistedAttention(harnessOnScreen.filename)).toEqual({ chat: true, harness: false })
+    })
+    expect(harnessOnScreen.note.badge()).toBe(1)
+  })
+
+  it('leaves another source untouched while the visible one has nothing to clear', async () => {
+    const { application, window, note, filename } = await foregrounded({ mode: 'chat' })
+    window.hide()
+    await application.receiveTaskEvent(unseenHarness('h1'))
+    await vi.waitFor(() => { expect(note.badge()).toBe(1) })
+
+    // Chat is what the user comes back to, and it holds no reminder, so viewing it
+    // must not reach across into Harness.
+    window.show()
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 120) })
+    expect(await persistedAttention(filename)).toEqual({ chat: false, harness: true })
+    expect(note.badge()).toBe(1)
+  })
+
+  it.each(['chat', 'harness'] as const)('clears only the source a %s notification click enters', async (source) => {
+    const other = source === 'chat' ? 'harness' : 'chat'
+    const { application, window, note, filename } = await foregrounded()
+    window.hide()
+    await application.receiveTaskEvent(unseenChat('c1'))
+    await application.receiveTaskEvent(unseenHarness('h1'))
+    await vi.waitFor(() => { expect(note.badge()).toBe(2) })
+
+    // The window is restored before Harness stops being the surface on screen, so the
+    // foreground edge inside the click must not acknowledge the source being left.
+    note.clicks.get(source)?.()
+    await vi.waitFor(async () => {
+      const seen = await persistedAttention(filename)
+      expect(seen[source]).toBe(false)
+      expect(seen[other]).toBe(true)
+    })
+    expect(note.badge()).toBe(1)
+    await vi.waitFor(() => { expect(application.snapshot()?.selected).toBe(source) })
+  })
+
+  it('neither alerts nor reminds when the visible source is already in view', async () => {
+    const { application, note, filename } = await foregrounded({ mode: 'chat' })
+    // The window is up and Chat is on screen: a Chat reply is seen as it lands.
+    await application.receiveTaskEvent(unseenChat('c1'))
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 120) })
+    expect(note.shown()).toBe(0)
+    expect(note.badge()).toBe(0)
+    expect(await persistedAttention(filename)).toEqual({ chat: false, harness: false })
+    expect(note.badges.filter(count => count > 0)).toEqual([])
   })
 })
 

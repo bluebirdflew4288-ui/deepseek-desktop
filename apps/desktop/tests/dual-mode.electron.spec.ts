@@ -739,7 +739,8 @@ it('delivers notification-only Harness failures while hidden without unread or r
       return { count: f.notificationCount(), badge: f.badge() }
     })
     expect(observed).toEqual({ count: 1, badge: 1 })
-    await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.show() })
+    // Closing while hidden keeps the reminder for the next launch: startup restores
+    // the Harness mode without acknowledging anything inside it.
     await application.close()
     application = await launchFixture(directory)
     await modeChrome(application)
@@ -790,6 +791,46 @@ it('raises a source-level Harness dot for unseen results and clears it on entry'
     chrome = await modeChrome(application)
     await waitForChromeNotifications(chrome)
     await expect.poll(() => harnessDot(chrome)).not.toBe('true')
+    await expect.poll(() => dockBadge(application!)).toBe(0)
+  } finally {
+    await application?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it('acknowledges only the source in view when the window returns to the foreground', { timeout: 30_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-attention-foreground-'))
+  let application: ElectronApplication | undefined
+  try {
+    application = await launchFixture(directory)
+    const chrome = await modeChrome(application)
+    await waitForChromeNotifications(chrome)
+    await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+    // Two unseen results in two sources, raised while the window is out of sight.
+    await notify(application, { id: 'c1', source: 'chat', kind: 'completed', targetId: 'c1', occurredAt: 1, topLevel: true, presentation: 'background-only' })
+    await notify(application, harnessOutcome('h1', 'completed'))
+    await expect.poll(() => harnessDot(chrome)).toBe('true')
+    await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).toBe('true')
+    await expect.poll(() => dockBadge(application!)).toBe(2)
+
+    await application.evaluate(({ BrowserWindow, app }) => {
+      BrowserWindow.getAllWindows()[0]?.show()
+      BrowserWindow.getAllWindows()[0]?.focus()
+      app.focus({ steal: true })
+    })
+    await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+
+    // Harness is the surface on screen, so the return spends only the Harness reminder
+    // and the Dock number is recomputed from what is left unseen.
+    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
+    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 500) })
+    expect(await chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).toBe('true')
+
+    // Entering Chat is the separate acknowledgement for the surviving reminder.
+    await selectMode(chrome, 'chat')
+    await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).not.toBe('true')
     await expect.poll(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)

@@ -327,8 +327,8 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  it('clears the Chat reminder when the user selects Chat without a notification', { timeout: 40_000 }, async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-entry-'))
+  it('acknowledges the Chat reminder when the app returns to the foreground on Chat', { timeout: 40_000 }, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-foreground-'))
     let application: ElectronApplication | undefined
     try {
       application = await launch(directory)
@@ -336,15 +336,63 @@ describe('Chat completion notifications', () => {
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
 
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.show() })
-      // Leave Chat first, then come back: only the explicit re-entry may clear it.
+      // No notification was clicked: the user brought the app back to the surface
+      // that already shows Chat, which is the acknowledgement this case pins.
+      await application.evaluate(({ BrowserWindow, app }) => {
+        BrowserWindow.getAllWindows()[0]?.show()
+        BrowserWindow.getAllWindows()[0]?.focus()
+        app.focus({ steal: true })
+      })
+      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
+      // The rendered Chat dot follows the acknowledged state, and acknowledging it
+      // never touches the receipts or unread accounting.
+      await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]')
+        .getAttribute('data-attention')).not.toBe('true')
+      const ledger = await persistedNotifications(directory)
+      expect(ledger.unread).toBe(0)
+      expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(1)
+    } finally {
+      await application?.close().catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the Chat reminder while the foreground returns to Harness, then clears it on entry', { timeout: 40_000 }, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-entry-'))
+    let application: ElectronApplication | undefined
+    try {
+      application = await launch(directory)
+      const { chrome, chat } = await openChat(application)
+      // Leave Chat before the reply lands, so Harness is what stays on screen.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
       await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      expect(await finishChatReply(chat)).toBe(200)
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+
+      await application.evaluate(({ BrowserWindow, app }) => {
+        BrowserWindow.getAllWindows()[0]?.show()
+        BrowserWindow.getAllWindows()[0]?.focus()
+        app.focus({ steal: true })
+      })
+      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      // Acknowledgement is scoped to the source in view: a return to Harness must not
+      // spend a reminder that belongs to Chat.
+      await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })
+      const foreground = await persistedNotifications(directory)
+      expect(foreground.chatAttention).toBe(true)
+      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
+
       await chrome.locator('#mode-switch [data-mode="chat"]').click()
       await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
       // Clearing the dot never touches the receipts or unread accounting.
       const ledger = await persistedNotifications(directory)
       expect(ledger.unread).toBe(0)
