@@ -318,12 +318,14 @@ export function createDesktopNotifications(options: {
      * Clear the source-level dot and its pending count because the user entered
      * that surface.
      *
-     * Called only for an explicit entry — choosing the mode or following a
-     * notification — so a plain restart that happens to restore Harness never
-     * silently discards a result the user has not been shown. Only the entered
-     * source is cleared; the other source keeps its count, so the Dock number
-     * falls by exactly the entries being acknowledged. It never touches per-event
-     * `read`, keeping ordinary unread accounting untouched.
+     * Called only when the user puts one surface in front of themselves: choosing
+     * the mode, following a notification, or returning the application to the
+     * foreground while that surface is already the one on screen. A restart that
+     * merely restores a mode is not an entry, so a result the user has not been
+     * shown survives it. Only the entered source is cleared; the other source
+     * keeps its count, so the Dock number is recomputed from the state that
+     * remains rather than stepped down. It never touches per-event `read`,
+     * keeping ordinary unread accounting untouched.
      * @param source - Surface the user just entered.
      * @returns Completion of persistence and chrome publication.
      */

@@ -1,4 +1,4 @@
-/** macOS effects for the desktop notification ledger. Other platforms remain unsupported. */
+/** macOS and Windows effects for the desktop notification ledger. */
 import { app, Notification } from 'electron'
 import type { DesktopNotificationAdapter, DesktopTaskEvent } from './desktop-notifications.ts'
 import type { DesktopShellLocale } from './shell-locale.ts'
@@ -15,7 +15,7 @@ export function createNativeNotifications(
 ): DesktopNotificationAdapter {
   const active = new Set<Notification>()
   return {
-    supported: () => process.platform === 'darwin' && Notification.isSupported(),
+    supported: () => ['darwin', 'win32'].includes(process.platform) && Notification.isSupported(),
     show(event: DesktopTaskEvent, onClick) {
       const zh = locale() === 'zh-CN'
       const body = event.source === 'chat' ? (zh ? 'Chat 回复已完成' : 'Chat reply completed')
@@ -28,7 +28,7 @@ export function createNativeNotifications(
       notification.once('close', () => { active.delete(notification) })
       notification.once('failed', () => {
         active.delete(notification)
-        reportError(new Error('Native notification delivery failed; check macOS notification settings'))
+        reportError(new Error('Native notification delivery failed; check operating-system notification settings'))
       })
       notification.show()
     },

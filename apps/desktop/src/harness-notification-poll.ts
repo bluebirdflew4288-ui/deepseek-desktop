@@ -81,15 +81,22 @@ export function createHarnessNotificationPoll(options: {
         if ((records[0]?.seq ?? Infinity) > previous + 1 || records.at(-1)?.seq !== s.cursor) continue
         // Consumed-event contract: `session/page` is already the runtime's validated data
         // boundary, because Session persistence rejects unknown non-ignorable events and
-        // admits unknown ignorable ones. This poller therefore interprets only the four
-        // events completion depends on and skips every other legal record without touching
-        // turn state. Re-declaring the full event vocabulary here would let one unrelated
-        // record abort the cycle and lose a real completion.
+        // admits unknown ignorable ones. This poller therefore interprets only the events
+        // the completion and waiting-for-user alerts depend on and skips every other legal
+        // record without touching turn state. Re-declaring the full event vocabulary here
+        // would let one unrelated record abort the cycle and lose a real completion.
         // A turn may start before the observation watermark and end after it, so turn state is
         // rebuilt from whatever evidence the bounded page still carries. Freshness is decided
         // only by `turn/end.seq > previous`, which is what keeps ended-before-watermark turns
         // from ever being replayed.
         let turn: { number: number; user: boolean; assistant: boolean } | undefined
+        // The runtime's own audit pair for a user decision: `approval/asked` is appended
+        // before the answerer runs and `approval/decided` after it settles, so an ask
+        // without its matching decision is the durable, content-free evidence that this
+        // session is waiting on the user. Both events are named in the audited runtime's
+        // known-event vocabulary.
+        const asked = new Map<string, RecordEvent>()
+        const decided = new Set<string>()
         for (const e of records) {
           if (e.type === 'turn/start') {
             turn = seq(e.data.turn) ? { number: e.data.turn, user: false, assistant: false } : undefined
@@ -103,6 +110,12 @@ export function createHarnessNotificationPoll(options: {
               const p = object(part)
               return p?.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0
             })
+          } else if (e.type === 'approval/asked') {
+            // An ask whose identity cannot be read cannot be matched against a decision,
+            // so it is dropped rather than reported as pending.
+            if (identity(e.data.id)) asked.set(e.data.id, e)
+          } else if (e.type === 'approval/decided') {
+            if (identity(e.data.id)) decided.add(e.data.id)
           } else if (e.type === 'turn/end') {
             const reason = object(e.data.reason)?.kind
             const kind = reason === 'error' ? 'failed' : reason === 'completed' && options.allowCompleted && turn?.assistant === true ? 'completed' : undefined
@@ -112,6 +125,13 @@ export function createHarnessNotificationPoll(options: {
             }
             turn = undefined
           }
+        }
+        // Only an ask newer than the watermark is reported: one observed before this
+        // reader's baseline is history, exactly like a turn that ended before it.
+        for (const [id, ask] of asked) {
+          if (decided.has(id) || ask.seq <= previous) continue
+          await options.receive({ id: `harness:${s.id}:${ask.seq}`, source: 'harness', targetId: s.id,
+            kind: 'action-required', occurredAt: ask.time, topLevel: true, presentation: 'background-only' })
         }
       }
       cursors = next

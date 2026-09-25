@@ -13,6 +13,8 @@ const VERSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u
 const DIRECTORIES = {
   versions: 'versions',
   staging: 'staging',
+  health: 'health',
+  backups: 'replacement-backups',
   npmCache: 'npm-cache',
   npmConfig: 'npm-config',
   logs: 'logs',
@@ -31,12 +33,17 @@ export const MANAGED_HARNESS_LOG_NAME = 'managed-harness.log'
 export interface ManagedHarnessLayout {
   /** Root directory holding every managed artifact. */
   readonly root: string
+  /** Electron-resolved program path boundary and OS-selected trusted base. */
+  readonly rootBoundary?: string
+  readonly rootAnchor?: string
   /** Version state file, written atomically. */
   readonly stateFile: string
   /** Parent of every retained program version. */
   readonly versions: string
   /** Parent of in-progress installs, which are promoted by rename. */
   readonly staging: string
+  readonly health: string
+  readonly backups: string
   /** Package cache owned by the managed installer. */
   readonly npmCache: string
   /**
@@ -63,14 +70,15 @@ export interface ManagedHarnessLayout {
    * @param version - Exact version being installed.
    * @returns The staging directory for that version.
    */
-  stagingDirectory(version: string): string
+  stagingDirectory(transactionId: string): string
   /**
    * Harness home a health check runs against, so promotion never writes to the
    * user's real Harness data.
    * @param version - Exact version being health-checked.
    * @returns The disposable Harness home for that check.
    */
-  healthHome(version: string): string
+  healthHome(transactionId: string): string
+  backupDirectory(transactionId: string): string
 }
 
 /**
@@ -89,12 +97,17 @@ export function isManagedHarnessVersionName(version: string): boolean {
  * @returns The layout, with every path derived from `root`.
  * @throws When `root` is not an absolute path.
  */
-export function managedHarnessLayout(root: string): ManagedHarnessLayout {
+export function managedHarnessLayout(
+  root: string,
+  security?: { readonly rootBoundary?: string; readonly rootAnchor?: string },
+): ManagedHarnessLayout {
   if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/u.test(root)) {
     throw new Error(`managed Harness root must be absolute: ${root}`)
   }
   const versions = join(root, DIRECTORIES.versions)
   const staging = join(root, DIRECTORIES.staging)
+  const health = join(root, DIRECTORIES.health)
+  const backups = join(root, DIRECTORIES.backups)
   const segment = (parent: string, version: string): string => {
     if (!isManagedHarnessVersionName(version)) {
       throw new Error(`managed Harness version is not a safe directory name: ${version}`)
@@ -104,16 +117,21 @@ export function managedHarnessLayout(root: string): ManagedHarnessLayout {
   const npmConfig = join(root, DIRECTORIES.npmConfig)
   return {
     root,
+    ...(security?.rootBoundary === undefined ? {} : { rootBoundary: security.rootBoundary }),
+    ...(security?.rootAnchor === undefined ? {} : { rootAnchor: security.rootAnchor }),
     stateFile: join(root, 'state.json'),
     versions,
     staging,
+    health,
+    backups,
     npmCache: join(root, DIRECTORIES.npmCache),
     npmUserConfig: join(npmConfig, 'user.npmrc'),
     npmGlobalConfig: join(npmConfig, 'global.npmrc'),
     logFile: join(root, DIRECTORIES.logs, MANAGED_HARNESS_LOG_NAME),
     versionDirectory: version => segment(versions, version),
-    stagingDirectory: version => segment(staging, version),
-    healthHome: version => segment(staging, `${version}.health-home`),
+    stagingDirectory: transactionId => segment(staging, transactionId),
+    healthHome: transactionId => segment(health, transactionId),
+    backupDirectory: transactionId => segment(backups, transactionId),
   }
 }
 

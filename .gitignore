@@ -37,6 +37,8 @@ apps/desktop/runtime-host/
 apps/desktop/runtime-npm/
 apps/desktop/dist/
 apps/desktop/output/
+# Internal Windows packaging preflight outputs.
+/apps/desktop/preflight-win-x64-*/
 output/
 .artifacts/
 .playwright-mcp/

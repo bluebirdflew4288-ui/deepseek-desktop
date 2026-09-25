@@ -12,6 +12,10 @@ export interface DesktopWindow {
   isDestroyed(): boolean
   /** Whether the native window is visible. */
   isVisible(): boolean
+  /** Whether the native window must be restored from the taskbar. */
+  isMinimized?(): boolean
+  /** Restore a minimized window before giving it focus. */
+  restore?(): void
   /** Reveal the existing window. */
   show(): void
   /** Give the existing window keyboard focus. */
@@ -65,6 +69,7 @@ export function createDesktopLifecycle(options: DesktopLifecycleOptions): Deskto
       creatingWindow ??= options.createWindow().finally(() => { creatingWindow = undefined })
       window = await creatingWindow
     }
+    if (window.isMinimized?.()) window.restore?.()
     if (!window.isVisible()) window.show()
     window.focus()
   }

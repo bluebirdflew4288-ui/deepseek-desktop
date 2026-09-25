@@ -16,8 +16,32 @@ env:
   NODE_VERSION: '24'
 
 jobs:
+  verify-release-tag:
+    name: Verify release tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Require the exact version on main history
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          node -e "const fs=require('node:fs'); const version=JSON.parse(fs.readFileSync('apps/desktop/package.json','utf8')).version; if (process.env.RELEASE_TAG !== 'v'+version) throw new Error('release tag must exactly match desktop version '+version);"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || { echo 'Release tag commit is not in origin/main history.'; exit 1; }
+
   build:
     name: Build ${{ matrix.name }}
+    needs: verify-release-tag
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -30,8 +54,9 @@ jobs:
             targets: dmg zip
             artifact: desktop-macos-arm64
             paths: |
-              apps/desktop/dist/*.dmg
-              apps/desktop/dist/*.zip
+              apps/desktop/dist/DeepSeek-Desktop-*-mac-arm64.dmg
+              apps/desktop/dist/DeepSeek-Desktop-*-mac-arm64.zip
+              apps/desktop/release-manifest.json
             builder_options: --config.mac.notarize=false --config.mac.hardenedRuntime=false
           - name: Windows x64
             runner: windows-2022
@@ -40,9 +65,9 @@ jobs:
             targets: nsis zip
             artifact: desktop-windows-x64
             paths: |
-              apps/desktop/dist/*.exe
-              apps/desktop/dist/*.zip
-            builder_options: ''
+              apps/desktop/dist/DeepSeek-Desktop-*-win-x64.exe
+              apps/desktop/dist/DeepSeek-Desktop-*-win-x64.zip
+              apps/desktop/release-manifest.json
 
     steps:
       - name: Check out source
@@ -69,11 +94,6 @@ jobs:
         working-directory: apps/desktop
         run: pnpm exec electron --version
 
-      - name: Verify release version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: node -e "const fs=require('node:fs'); const tag=process.env.RELEASE_TAG; const expected=JSON.parse(fs.readFileSync('apps/desktop/package.json','utf8')).version; if (tag.slice(1)!==expected) throw new Error('tag '+tag+' does not match desktop version '+expected); console.log('desktop release version '+expected);"
-
       - name: Verify runner architecture
         env:
           EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
@@ -82,14 +102,39 @@ jobs:
       - name: Build repository
         run: pnpm run build
 
-      - name: Stage Host runtime
-        run: node --import tsx apps/desktop/scripts/stage-runtime.ts
+      - name: Stage managed npm runtime
+        run: node --import tsx apps/desktop/scripts/stage-npm.ts
 
-      - name: Build distributable
+      - name: Build macOS distributables
+        if: matrix.platform == 'mac'
         working-directory: apps/desktop
-        run: pnpm exec electron-builder --${{ matrix.platform }} ${{ matrix.targets }} --${{ matrix.architecture }} --publish never ${{ matrix.builder_options }}
+        run: pnpm exec electron-builder --mac ${{ matrix.targets }} --${{ matrix.architecture }} --publish never ${{ matrix.builder_options }}
 
-      - name: Upload platform artifacts
+      - name: Write macOS artifact manifest
+        if: matrix.platform == 'mac'
+        working-directory: apps/desktop
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node --import tsx scripts/release-assets.ts write-platform-manifest --platform mac-arm64 --tag "$RELEASE_TAG" --dist dist --output release-manifest.json
+
+      - name: Build and verify signed Windows x64 distributables
+        if: matrix.platform == 'win'
+        working-directory: apps/desktop
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ vars.WINDOWS_EXPECTED_PUBLISHER }}
+          WINDOWS_RFC3161_TIMESTAMP_SERVER: ${{ vars.WINDOWS_RFC3161_TIMESTAMP_SERVER }}
+        run: node --import tsx scripts/windows-release-build.ts
+
+      - name: Write Windows x64 artifact manifest
+        if: matrix.platform == 'win'
+        working-directory: apps/desktop
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node --import tsx scripts/release-assets.ts write-platform-manifest --platform win-x64 --tag "$env:RELEASE_TAG" --dist dist --output release-manifest.json
+
+      - name: Upload verified platform artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -98,29 +143,47 @@ jobs:
           retention-days: 7
 
   release:
-    name: Create GitHub Release
-    needs: build
+    name: Draft, verify, and publish GitHub Release
+    needs: [verify-release-tag, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Download platform artifacts
+      - name: Check out release notes and manifest verifier
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install release-script dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-assets
-          merge-multiple: true
+          name: desktop-macos-arm64
+          path: release-assets/mac
 
-      - name: Create or update GitHub Release
+      - name: Download Windows x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows-x64
+          path: release-assets/win
+
+      - name: Create draft, reconcile immutable assets, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$RELEASE_TAG" release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "DeepSeek Desktop $RELEASE_TAG" \
-              --generate-notes \
-              --notes "Unsigned macOS Apple Silicon and Windows x64 desktop builds."
-          fi
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node --import tsx apps/desktop/scripts/release-assets.ts sync --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --artifacts-root release-assets --notes-template .github/release-notes/desktop.md

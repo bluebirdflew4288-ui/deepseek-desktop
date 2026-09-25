@@ -14,8 +14,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { assertWindowsRuntimeIdle } from './windows-runtime-recovery.ts'
 import {
   createHostSupervisor,
   spawnDshWeb,
@@ -44,7 +45,7 @@ import {
   runManagedProcess,
   type ManagedProcessRunner,
 } from './managed-harness-process.ts'
-import { type HarnessRelease, type HarnessReleaseSource } from './managed-harness-registry.ts'
+import { HARNESS_PACKAGE, type HarnessRelease, type HarnessReleaseSource } from './managed-harness-registry.ts'
 import {
   loadManagedHarnessState,
   promoteManagedHarnessVersion,
@@ -55,6 +56,16 @@ import {
 
 /** File recording the Harness process this desktop launch owns. */
 const RUNTIME_RECORD_NAME = 'runtime.json'
+
+/** Version-local ownership record required before garbage collection. */
+const MANAGED_VERSION_MANIFEST_NAME = '.dsh-desktop-managed.json'
+
+/** Strict Semantic Versioning names accepted as direct managed-version children. */
+const SEMVER_VERSION_PATTERN = new RegExp([
+  String.raw`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`,
+  String.raw`(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?`,
+  String.raw`(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`,
+].join(''), 'u')
 
 /** Bound on the ownership probe that reads one process's command line. */
 const OWNERSHIP_PROBE_TIMEOUT_MS = 10_000
@@ -254,8 +265,14 @@ export interface ManagedHarnessRuntime {
 
 /** Dependencies the managed runtime needs. */
 export interface ManagedHarnessRuntimeOptions {
+  /** Host platform; tests may exercise another platform protocol. */
+  readonly platform?: NodeJS.Platform
   /** Directory the desktop owns for managed Harness artifacts. */
   readonly root: string
+  /** Electron-resolved profile/program root; ancestors above it are OS-selected paths. */
+  readonly rootBoundary?: string
+  /** Trusted OS-selected base; controlled ancestors between it and root are checked. */
+  readonly rootAnchor?: string
   /** Executable that runs both the package manager and the Harness. */
   readonly nodeExecutable: string
   /** Working directory the Harness inherits. */
@@ -288,8 +305,14 @@ export interface ManagedHarnessRuntimeOptions {
  * @returns The runtime the desktop composition root drives.
  */
 export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOptions): ManagedHarnessRuntime {
-  const layout: ManagedHarnessLayout = managedHarnessLayout(options.root)
-  const diagnostics = options.diagnostics ?? createManagedHarnessDiagnostics({ file: layout.logFile })
+  const layout: ManagedHarnessLayout = managedHarnessLayout(options.root, {
+    ...(options.rootBoundary === undefined ? {} : { rootBoundary: options.rootBoundary }),
+    ...(options.rootAnchor === undefined ? {} : { rootAnchor: options.rootAnchor }),
+  })
+  const diagnostics = options.diagnostics ?? createManagedHarnessDiagnostics({
+    file: layout.logFile,
+    trustedAnchor: layout.rootAnchor ?? layout.rootBoundary ?? layout.root,
+  })
   const createSupervisor = options.createSupervisor ?? createHostSupervisor
   const runProcess = options.runProcess ?? runManagedProcess
   const recordFile = join(layout.root, RUNTIME_RECORD_NAME)
@@ -300,6 +323,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
   let cachedState: ManagedHarnessState = {}
   let invalid = false
   let failure: string | undefined
+  let recoveryBlocked = (options.platform ?? process.platform) === 'win32'
 
   /**
    * The staging transaction currently running, absent when none is. Its stage is
@@ -366,6 +390,134 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
     cachedState = state
   }
 
+  /** Prove a direct version child is a complete program directory created here. */
+  async function isDesktopManagedVersionDirectory(directory: string, version: string): Promise<boolean> {
+    if (!SEMVER_VERSION_PATTERN.test(version)) return false
+    try {
+      const directoryMetadata = await lstat(directory)
+      if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) return false
+
+      const ownershipPath = join(directory, MANAGED_VERSION_MANIFEST_NAME)
+      const ownershipMetadata = await lstat(ownershipPath)
+      if (!ownershipMetadata.isFile() || ownershipMetadata.isSymbolicLink()) return false
+      const ownership = JSON.parse(await readFile(ownershipPath, 'utf8')) as {
+        schemaVersion?: unknown
+        package?: unknown
+        version?: unknown
+        transactionId?: unknown
+      }
+      if (ownership.schemaVersion !== 1 || ownership.package !== HARNESS_PACKAGE || ownership.version !== version
+        || typeof ownership.transactionId !== 'string' || !/^[0-9a-f-]{36}$/u.test(ownership.transactionId)) {
+        return false
+      }
+
+      const harnessDirectory = join(directory, 'node_modules', '@deepseek-ai', 'dsh')
+      for (const path of [
+        join(directory, 'node_modules'),
+        join(directory, 'node_modules', '@deepseek-ai'),
+        harnessDirectory,
+      ]) {
+        const metadata = await lstat(path)
+        if (!metadata.isDirectory() || metadata.isSymbolicLink()) return false
+      }
+      const packagePath = join(harnessDirectory, 'package.json')
+      const packageMetadata = await lstat(packagePath)
+      if (!packageMetadata.isFile() || packageMetadata.isSymbolicLink()) return false
+      const installed = JSON.parse(await readFile(packagePath, 'utf8')) as { name?: unknown; version?: unknown }
+      return installed.name === HARNESS_PACKAGE && installed.version === version
+    } catch {
+      return false
+    }
+  }
+
+  /** Write ownership only after the candidate has passed verification and health. */
+  async function markDesktopManagedVersion(directory: string, version: string): Promise<void> {
+    await writeFile(join(directory, MANAGED_VERSION_MANIFEST_NAME), JSON.stringify({
+      schemaVersion: 1,
+      package: HARNESS_PACKAGE,
+      version,
+    }), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+  }
+
+  async function ownedInstallId(directory: string, expectedVersion: string): Promise<string | undefined> {
+    try {
+      const metadata = await lstat(directory)
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) return undefined
+      const path = join(directory, MANAGED_VERSION_MANIFEST_NAME)
+      const markerMetadata = await lstat(path)
+      if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink()) return undefined
+      const marker = JSON.parse(await readFile(path, 'utf8')) as { schemaVersion?: unknown; package?: unknown; version?: unknown; transactionId?: unknown }
+      const manifest = JSON.parse(await readFile(join(directory, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')) as { name?: unknown; version?: unknown }
+      if (marker.schemaVersion !== 1 || marker.package !== HARNESS_PACKAGE || marker.version !== expectedVersion
+        || manifest.version !== expectedVersion
+        || manifest.name !== HARNESS_PACKAGE || typeof marker.transactionId !== 'string'
+        || !/^[0-9a-f-]{36}$/u.test(marker.transactionId)) return undefined
+      return marker.transactionId
+    } catch { return undefined }
+  }
+
+  async function removeOwnedPath(path: string, markerName: string, txId: string): Promise<boolean> {
+    try {
+      const metadata = await lstat(path)
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) return false
+      const markerPath = join(path, markerName)
+      const markerMetadata = await lstat(markerPath)
+      if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink()) return false
+      const marker = JSON.parse(await readFile(markerPath, 'utf8')) as { transactionId?: unknown }
+      if (marker.transactionId !== txId) return false
+      await rm(path, { recursive: true, force: false })
+      return true
+    } catch { return false }
+  }
+
+  async function ensureManagedDirectory(path: string): Promise<void> {
+    try {
+      const metadata = await lstat(path)
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error(`managed Harness directory is not a real directory: ${path}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      await mkdir(path, { recursive: false, mode: 0o700 })
+      const metadata = await lstat(path)
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error(`managed Harness directory is not a real directory: ${path}`)
+    }
+  }
+
+  async function assertManagedPathHasNoReparseAncestors(path: string): Promise<void> {
+    const absolute = resolve(path)
+    const rootPath = parse(absolute).root
+    const boundary = resolve(options.rootBoundary ?? rootPath)
+    const anchor = resolve(options.rootAnchor ?? rootPath)
+    const isDescendant = (parent: string, child: string): boolean => {
+      const fromParent = relative(parent, child)
+      return fromParent === '' || (fromParent !== '..' && !fromParent.startsWith(`..${sep}`) && !isAbsolute(fromParent))
+    }
+    if (!isDescendant(boundary, absolute) || !isDescendant(anchor, boundary)) {
+      throw new Error('managed Harness root is outside its trusted program directory')
+    }
+    const chain: string[] = []
+    let current = absolute
+    while (true) {
+      chain.push(current)
+      if (relative(anchor, current) === '') break
+      if (current === rootPath) throw new Error('managed Harness trust anchor is not an ancestor')
+      const parent = dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+    for (const entry of chain.reverse()) {
+      try {
+        const metadata = await lstat(entry)
+        if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+          throw new Error(`managed Harness path contains a reparse point or non-directory: ${entry}`)
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+    }
+    if (rootPath === '') throw new Error('managed Harness root is not absolute')
+  }
+
   /** Launch descriptor for one promoted version, or undefined when none is. */
   function describeLaunch(state: ManagedHarnessState): ManagedHarnessLaunch | undefined {
     if (state.current === undefined) return undefined
@@ -381,7 +533,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
   }
 
   /**
-   * Delete program directories no retained version references.
+   * Diagnose program directories no retained version references without deleting them.
    *
    * Only the program tree is swept. The Harness home holding settings,
    * credentials, and sessions is never enumerated here, so retention can never
@@ -390,19 +542,30 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
    */
   async function collectGarbage(state: ManagedHarnessState): Promise<void> {
     const retained = new Set([state.current, state.previous].filter((v): v is string => v !== undefined))
-    const versions = await readdir(layout.versions).catch(() => [] as string[])
+    const versionsRoot = await lstat(layout.versions).catch(() => undefined)
+    if (versionsRoot === undefined || !versionsRoot.isDirectory() || versionsRoot.isSymbolicLink()) return
+    const versions = await readdir(layout.versions)
     for (const entry of versions) {
       if (retained.has(entry)) continue
-      await rm(join(layout.versions, entry), { recursive: true, force: true })
-      await diagnostics.record({ operation: 'gc', version: entry, phase: 'removed' })
+      const directory = join(layout.versions, entry)
+      if (!await isDesktopManagedVersionDirectory(directory, entry)) {
+        await diagnostics.record({ operation: 'gc', version: entry, phase: 'preserved-unmanaged' })
+        continue
+      }
+      await diagnostics.record({ operation: 'gc', version: entry, phase: 'preserved-managed-orphan' })
     }
-    await rm(layout.staging, { recursive: true, force: true })
+    // A copied ownership marker cannot prove a version directory is disposable.
+    // Keep all version paths; journaled transaction artifacts have separate IDs.
   }
 
   /** Discard one staged version that never earned promotion. */
-  async function discardStaging(version: string): Promise<void> {
-    await rm(layout.stagingDirectory(version), { recursive: true, force: true })
-    await rm(layout.healthHome(version), { recursive: true, force: true })
+  async function discardStaging(transactionId: string): Promise<boolean> {
+    const safelyAbsentOrRemoved = async (path: string, marker: string): Promise<boolean> => {
+      try { await lstat(path) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; return false }
+      return removeOwnedPath(path, marker, transactionId)
+    }
+    return await safelyAbsentOrRemoved(layout.stagingDirectory(transactionId), '.dsh-desktop-transaction.json')
+      && await safelyAbsentOrRemoved(layout.healthHome(transactionId), '.dsh-desktop-health.json')
   }
 
   /**
@@ -505,12 +668,21 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
     integrity: string | undefined,
   ): Promise<ManagedHarnessTransaction> {
     busy = operation
-    const staging = layout.stagingDirectory(version)
+    const transactionId = randomUUID()
+    const transactionRoot = layout.stagingDirectory(transactionId)
+    const staging = join(transactionRoot, 'candidate')
     let promoted = false
+    let pending: NonNullable<ManagedHarnessState['pending']> = { operation, version, transactionId, phase: 'prepared' }
+    let backupInstallId: string | undefined
     try {
+      await assertManagedPathHasNoReparseAncestors(layout.root)
       if (cancelRequested()) return { outcome: 'cancelled' }
-      await writeState({ ...state, pending: { operation, version } })
-      await mkdir(layout.staging, { recursive: true, mode: 0o700 })
+      await writeState({ ...state, pending })
+      await ensureManagedDirectory(layout.staging)
+      await mkdir(transactionRoot, { recursive: false, mode: 0o700 })
+      await writeFile(join(transactionRoot, '.dsh-desktop-transaction.json'), JSON.stringify({ schemaVersion: 1, transactionId }), { flag: 'wx', mode: 0o600 })
+      pending = { ...pending, phase: 'staging' }
+      await writeState({ ...state, pending })
       await diagnostics.record({
         operation,
         version,
@@ -556,7 +728,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
       }
 
       publishStage('health', false)
-      const health = await options.healthCheck.check({ versionDirectory: staging, version })
+      const health = await options.healthCheck.check({ versionDirectory: staging, version, transactionId })
       await diagnostics.record({
         operation,
         version,
@@ -568,17 +740,46 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
         return { outcome: 'failed', reason: `Harness ${version} failed its health check` }
       }
 
+      await markDesktopManagedVersion(staging, version)
+      const markerPath = join(staging, MANAGED_VERSION_MANIFEST_NAME)
+      const marker = JSON.parse(await readFile(markerPath, 'utf8')) as Record<string, unknown>
+      marker.transactionId = transactionId
+      await writeFile(markerPath, JSON.stringify(marker), { flag: 'w', mode: 0o600 })
+      pending = { ...pending, phase: 'verified' }
+      await writeState({ ...state, pending })
+
       const target = layout.versionDirectory(version)
-      await mkdir(layout.versions, { recursive: true, mode: 0o700 })
-      const backup = join(layout.root, 'replacement-backup')
-      if (existsSync(target)) await rename(target, backup)
+      await ensureManagedDirectory(layout.versions)
+      const backup = layout.backupDirectory(transactionId)
+      if (existsSync(target)) {
+        if (state.current !== version) throw new Error(`managed Harness target already exists and is not current: ${version}`)
+        backupInstallId = await ownedInstallId(target, version)
+        if (backupInstallId === undefined) throw new Error(`managed Harness current version has no trusted ownership marker: ${version}`)
+        await ensureManagedDirectory(layout.backups)
+        if (existsSync(backup)) throw new Error(`managed Harness transaction backup path already exists: ${transactionId}`)
+        pending = { ...pending, phase: 'backup-planned', backupInstallId }
+        await writeState({ ...state, pending })
+        await rename(target, backup)
+        pending = { ...pending, phase: 'backed-up' }
+        await writeState({ ...state, pending })
+        await diagnostics.record({ operation, version, phase: 'backed-up' })
+      }
       await rename(staging, target)
+      pending = { ...pending, phase: 'promoted' }
+      await writeState({ ...state, pending })
       const next = promoteManagedHarnessVersion(state, version)
-      await writeState(next)
+      await writeState({ ...next, pending: { ...pending, phase: 'committed' } })
       promoted = true
       failure = undefined
       retain(next)
-      await rm(join(layout.root, 'replacement-backup'), { recursive: true, force: true })
+      if (backupInstallId !== undefined && await ownedInstallId(backup, version) === backupInstallId) {
+        await rm(backup, { recursive: true, force: false })
+      }
+      // Keep the committed journal until both transaction-owned scratch roots
+      // are gone. If cleanup fails, recovery can retry it on the next launch.
+      if (!await discardStaging(transactionId)) throw new Error(`managed Harness transaction artifacts could not be safely cleaned: ${transactionId}`)
+      const { pending: _committed, ...committed } = next
+      await writeState(committed)
       await collectGarbage(next)
       await diagnostics.record({ operation, version, phase: 'promoted' })
       promoted = true
@@ -591,27 +792,48 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
       return promoted ? { outcome: 'promoted', version } : { outcome: 'failed', reason }
     } finally {
       busy = undefined
-      if (!promoted) {
-        const backup = join(layout.root, 'replacement-backup')
-        if (existsSync(backup)) {
-          await rm(layout.versionDirectory(version), { recursive: true, force: true })
-          await rename(backup, layout.versionDirectory(version))
+      let rollbackSafe = true
+      if (!promoted && backupInstallId !== undefined) {
+        const target = layout.versionDirectory(version)
+        const backup = layout.backupDirectory(transactionId)
+        const targetId = await ownedInstallId(target, version)
+        const backupId = await ownedInstallId(backup, version)
+        const oldAtTarget = targetId === backupInstallId
+        const oldAtBackup = backupId === backupInstallId
+        if ((!oldAtTarget && !oldAtBackup)
+          || (existsSync(target) && !oldAtTarget && targetId !== transactionId)) {
+          rollbackSafe = false
+          cachedLaunch = undefined
+        } else {
+          if (targetId === transactionId) await rm(target, { recursive: true, force: false }).catch(() => { rollbackSafe = false })
+          if (rollbackSafe && oldAtBackup && !existsSync(target)) await rename(backup, target).catch(() => { rollbackSafe = false })
         }
       }
-      if (promoted) await discardStaging(version).catch(() => undefined)
-      else await discardStaging(version)
-      // An unpromoted candidate left the transaction marker behind; clearing it
-      // is what makes the next launch treat the retained version as authoritative.
-      if (!promoted && cachedState.pending !== undefined) {
-        const { pending: _discarded, ...rest } = cachedState
-        await writeState(rest).catch(() => undefined)
+      const artifactsClean = await discardStaging(transactionId).catch(() => false)
+      if (!promoted && artifactsClean && rollbackSafe
+        && (backupInstallId === undefined || !existsSync(layout.backupDirectory(transactionId)))) {
+        const { pending: _pending, ...rest } = state
+        await writeState(rest).catch(() => { recoveryBlocked = true })
+      } else if (!promoted) {
+        recoveryBlocked = true
+        if (!artifactsClean) {
+          failure = 'managed Harness transaction did not complete; its owned scratch data could not be safely cleared, so further changes are blocked until recovery succeeds'
+          await diagnostics.record({ operation, version, phase: 'scratch-cleanup-failed', failure }).catch(() => undefined)
+        }
+        if (rollbackSafe) retain(state)
+        else cachedLaunch = undefined
       }
     }
   }
 
   /** Load state for a transaction, recording an unusable state file as one. */
-  async function stateForTransaction(): Promise<ManagedHarnessState | undefined> {
+  async function stateForTransaction(recovering = false): Promise<ManagedHarnessState | undefined> {
+    if (recoveryBlocked && !recovering) {
+      failure = 'managed Harness recovery is incomplete; restart Desktop to retry'
+      return undefined
+    }
     try {
+      await assertManagedPathHasNoReparseAncestors(layout.root)
       return await readState()
     } catch (error) {
       invalid = true
@@ -677,14 +899,38 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
 
   return {
     async recover() {
+      recoveryBlocked = true
+      cachedLaunch = undefined
+      failure = 'managed Harness recovery is incomplete; restart Desktop to retry'
+      await assertManagedPathHasNoReparseAncestors(layout.root)
+      const windows = (options.platform ?? process.platform) === 'win32'
+      if (windows) await assertWindowsRuntimeIdle(layout.root, runProcess)
       await mkdir(layout.root, { recursive: true, mode: 0o700 })
-      const state = await stateForTransaction()
+      const state = await stateForTransaction(true)
       if (state === undefined) return
       let recovered = state
       if (state.pending !== undefined) {
+        if (state.pending.transactionId === undefined) {
+          failure = 'legacy managed Harness transaction is unresolved; artifacts were preserved and new transactions are blocked'
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'legacy-pending-unresolved', failure })
+          const currentDirectory = state.current === undefined ? undefined : layout.versionDirectory(state.current)
+          if (currentDirectory !== undefined) {
+            try {
+              const metadata = await lstat(currentDirectory)
+              const packagePath = join(currentDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+              const packageMetadata = await lstat(packagePath)
+              const installed = JSON.parse(await readFile(packagePath, 'utf8')) as { name?: unknown; version?: unknown }
+              const cliMetadata = await lstat(harnessCliEntry(currentDirectory))
+              if (metadata.isDirectory() && !metadata.isSymbolicLink() && packageMetadata.isFile()
+                && !packageMetadata.isSymbolicLink() && installed.name === HARNESS_PACKAGE
+                && installed.version === state.current && cliMetadata.isFile() && !cliMetadata.isSymbolicLink()) retain(state)
+            } catch { /* Keep the launch descriptor absent when current is unavailable. */ }
+          }
+          return
+        }
         // A live installer retains its staging directory even if its parent has exited.
         const deadline = Date.now() + OWNERSHIP_PROBE_TIMEOUT_MS
-        for (;;) {
+        for (; !windows;) {
           const candidates = await runProcess({ command: 'pgrep', args: ['-f', 'npm(-cli.js| install)'],
             env: managedProcessEnvironment(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS })
           if (candidates.outputTruncated || (candidates.exitCode !== 0 && candidates.exitCode !== 1)) {
@@ -705,26 +951,84 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
           if (Date.now() >= deadline) throw new Error('managed installer is still running; recovery deferred')
           await new Promise(resolve => setTimeout(resolve, 250))
         }
-        const backup = join(layout.root, 'replacement-backup')
-        if (existsSync(backup)) {
-          const target = layout.versionDirectory(state.pending.version)
-          await rm(target, { recursive: true, force: true })
-          await rename(backup, target)
+        const txId = state.pending.transactionId
+        await ensureManagedDirectory(layout.versions)
+        await ensureManagedDirectory(layout.backups)
+        await ensureManagedDirectory(layout.staging)
+        await ensureManagedDirectory(layout.health)
+        const target = layout.versionDirectory(state.pending.version)
+        const backup = layout.backupDirectory(txId)
+        const targetInstallId = await ownedInstallId(target, state.pending.version)
+        const backupInstallId = await ownedInstallId(backup, state.pending.version)
+        const committed = state.pending.phase === 'committed'
+        const beforeBackup = state.pending.phase === undefined
+          || state.pending.phase === 'prepared' || state.pending.phase === 'staging' || state.pending.phase === 'verified'
+        const untouchedCurrent = beforeBackup && state.current === state.pending.version && targetInstallId !== undefined
+        const backupExpected = state.pending.backupInstallId
+        const oldAtTarget = backupExpected !== undefined && targetInstallId === backupExpected
+        const oldAtBackup = backupExpected !== undefined && backupInstallId === backupExpected
+        if (!committed && backupExpected !== undefined && !oldAtTarget && !oldAtBackup) {
+          failure = 'managed Harness recovery cannot prove the previous install; artifacts were preserved and launch is unavailable'
+          cachedLaunch = undefined
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'missing-previous-install-preserved', failure })
+          return
         }
-        await discardStaging(state.pending.version)
-        await diagnostics.record({
-          operation: 'recover',
-          version: state.pending.version,
-          phase: 'discarded-pending',
-        })
+        if (existsSync(backup) && backupInstallId !== state.pending.backupInstallId) {
+          failure = 'managed Harness recovery found an unknown backup; artifacts were preserved'
+          cachedLaunch = undefined
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'unknown-backup-preserved', failure })
+          return
+        }
+        if (committed && targetInstallId !== txId) {
+          failure = 'managed Harness recovery cannot prove the committed target; artifacts were preserved'
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'unknown-target-preserved', failure })
+          return
+        }
+        if (!committed && targetInstallId === txId) {
+          await rm(target, { recursive: true, force: false })
+        } else if (existsSync(target) && (committed ? targetInstallId !== txId
+          : targetInstallId !== state.pending.backupInstallId && !untouchedCurrent)) {
+          failure = 'managed Harness recovery found an unknown target; artifacts were preserved'
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'unknown-target-preserved', failure })
+          return
+        }
+        if (backupInstallId !== undefined) {
+          if (backupInstallId !== state.pending.backupInstallId) {
+            failure = 'managed Harness recovery found an unknown backup; artifacts were preserved'
+            await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'unknown-backup-preserved', failure })
+            return
+          }
+          if (!committed && !existsSync(target)) await rename(backup, target)
+          else if (committed) await rm(backup, { recursive: true, force: false })
+        } else if (existsSync(backup)) {
+          failure = 'managed Harness recovery found an unowned backup; artifacts were preserved'
+          cachedLaunch = undefined
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'unknown-backup-preserved', failure })
+          return
+        }
+        if (!await discardStaging(txId)) {
+          failure = 'managed Harness recovery found unowned transaction scratch data; the committed install was kept and recovery is deferred'
+          recoveryBlocked = true
+          retain(state)
+          await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: 'committed-scratch-preserved', failure })
+          return
+        }
+        await diagnostics.record({ operation: 'recover', version: state.pending.version, phase: committed ? 'completed-transaction' : 'rolled-back-transaction' })
         const { pending: _discarded, ...rest } = state
-        recovered = rest
+        recovered = committed ? state : rest
+        // A committed transaction's current/previous were persisted before the
+        // phase; a non-committed transaction keeps the original state versions.
+        if (committed) {
+          const { pending: _committed, ...withoutPending } = state
+          recovered = withoutPending
+        }
         await writeState(recovered)
       }
-      await rm(join(layout.root, 'replacement-backup'), { recursive: true, force: true })
       await collectGarbage(recovered)
-      await reclaimOwnedOrphan()
+      if (windows) await rm(recordFile, { force: true })
+      else await reclaimOwnedOrphan()
       failure = undefined
+      recoveryBlocked = false
       retain(recovered)
     },
 
@@ -820,6 +1124,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
 
     rollback() {
       return enqueue(async (): Promise<ManagedHarnessTransaction> => {
+        await assertManagedPathHasNoReparseAncestors(layout.root)
         const state = await stateForTransaction()
         if (state === undefined) return { outcome: 'failed', reason: 'managed Harness state is unusable' }
         if (state.previous === undefined || state.current === undefined) {
@@ -833,6 +1138,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
           const health = await options.healthCheck.check({
             versionDirectory: layout.versionDirectory(previous),
             version: previous,
+            transactionId: randomUUID(),
           })
           await diagnostics.record({
             operation: 'rollback',

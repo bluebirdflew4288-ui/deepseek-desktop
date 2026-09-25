@@ -17,7 +17,7 @@ vi.mock('electron', async () => {
 afterEach(() => { vi.clearAllMocks() })
 it('uses native support and the macOS Dock counter without adding task identifiers to system copy', () => {
   const adapter = createNativeNotifications(() => 'zh-CN', vi.fn())
-  expect(adapter.supported()).toBe(process.platform === 'darwin' && Notification.isSupported())
+  expect(adapter.supported()).toBe(['darwin', 'win32'].includes(process.platform) && Notification.isSupported())
   adapter.show({ id: 'private-id', targetId: 'private-target', source: 'harness', kind: 'failed', topLevel: true, occurredAt: 1 }, vi.fn())
   expect(native.options).toHaveBeenCalledWith({ title: 'DeepSeek Desktop', body: 'Harness 任务执行失败' })
   expect(native.show).toHaveBeenCalledOnce()

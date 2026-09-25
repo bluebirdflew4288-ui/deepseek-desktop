@@ -55,11 +55,11 @@ Native chrome follows the host platform. macOS uses a frameless inset title bar,
 
 ### Desktop notifications
 
-Application and tray settings control Chat replies, Harness completion/failure/action requests, Dock counts, in-app indicators, and ordinary notification accent (theme, DeepSeek, blue, purple, green, or custom color). Failure stays red and action requests stay amber. Unread dots belong to the Desktop Chat/Harness switch; counts also appear in accessible labels. Disabling presentation does not mark anything read.
+Application and tray settings control Chat replies, Harness completion/failure/action requests, in-app indicators, and ordinary notification accent (theme, DeepSeek, blue, purple, green, or custom color). On macOS they also control Dock counts; Windows omits that menu choice. Failure stays red and action requests stay amber. Unread dots belong to the Desktop Chat/Harness switch; counts also appear in accessible labels. Disabling presentation does not mark anything read.
 
 Source attention uses the same fixed notification red (`#ff3b30`) for Chat and Harness in light and dark themes, independently of selection and ordinary notification accent. The source switch keeps that boolean dot; the macOS Dock number adds the persisted Chat and Harness pending counts, one per unseen result, and explicit entry into a source clears only that source's count. A notification click is also an explicit entry. The Dock setting hides the number without discarding the reminder, ordinary unread never feeds it, and it survives restart. Chat attention is raised by the audited completion, regenerate, and continue endpoints finishing successfully; a generation the user stops is never announced.
 
-The Desktop state file atomically retains minimal notification metadata and deduplication records, without message text or Memory content. A notification click restores the window and selects the source mode. Only confirmed visibility of the exact target can mark its events read; unknown targets remain unread. Native macOS alerts contain fixed localized copy. Other platforms have no notification implementation.
+The Desktop state file atomically retains minimal notification metadata and deduplication records, without message text or Memory content. A notification click restores the window and selects the source mode. Only confirmed visibility of the exact target can mark its events read; unknown targets remain unread. Native macOS and Windows alerts contain fixed localized copy. The Dock number remains macOS-only; Windows uses its native notification surface and the in-app unread indicators.
 
 **Basic Harness notifications:** audited managed runtime fingerprints enable background failure and completion notifications through read-only `session/list` and `session/page` polling. Desktop never opens `follow` or `$events` for notifications. Focused, visible, non-minimized windows suppress native delivery; hidden or minimized windows permit it. Each unseen Harness result raises the Harness dot and adds one to the Dock number, while its receipt stays read and never enters ordinary unread; clicking restores Harness. Forks and subagents are excluded. First observations and interrupted continuity establish a baseline without replay; bounded polling can miss outcomes. See the [Basic notification decision](../../.agents/notes/implemented/feature/2026-09-14-harness-background-failure-notifications.md).
 
@@ -83,9 +83,25 @@ Before Electron Builder runs, this command materializes the native Electron runt
 
 Packaged applications install and run the selected official `@deepseek-ai/dsh` version in a separate process through Electron's Node mode. The application therefore retains the supervised-Host lifecycle without shipping a second Node executable or a fixed Harness closure. The pinned npm runtime is verified before packaging and by an `afterPack` check. Both macOS and Windows use the exact tracked `apps/desktop/build/icon.png` source; the repository does not preprocess or commit platform-specific icon variants.
 
+### Windows local trial
+
+On Windows x64, build an unsigned per-user NSIS installer and ZIP without publishing:
+
+```sh
+pnpm --filter @deepseek-ai/dsh-desktop run dist:win
+```
+
+Outputs are in `apps/desktop/dist/`. The installer creates desktop and Start menu shortcuts and preserves application data on uninstall. Press F10 to open the application menu; close or Alt+F4 hides the window, and the color tray icon restores it even when minimized. Quit from the tray to stop Desktop. macOS-only Hide, Services, Speech, and substitution roles are omitted on Windows. Windows supports native Chat and Harness notifications and in-app unread indicators; a live event flow still needs an authenticated Chat or working Harness. The package verifies pinned npm using its own Windows executable.
+
+Windows recovery waits for processes referencing the managed program directory to exit. If enumeration fails or files are still in use, installation, updates, and rollback remain blocked until a successful recovery after restart. Recovery never terminates a process using a stale PID record.
+
+On a default Windows launch, Desktop's replaceable state file and managed Harness installation live under `%USERPROFILE%\\.deepseek-desktop`; Chromium's Chat profile, login, and Memory remain in Electron's roaming user-data directory. An explicit `--user-data-dir` keeps all Desktop-owned files inside that selected profile. On first launch after upgrading, the selected mode and validated appearance/language preferences are copied from the previous state file only when no new state exists; the old file and browser profile are left in place.
+
+The managed install manifest pins Cordis 4.0.2 and `cordis-plugin-loader` 1.0.3 together. The 1.0.5 Harness release otherwise mixes those versions with 4.0.4 and 1.0.5 at the install root; recursive profile entries then fail with `entry._await is not a function`. This pair passed a package-only synthetic boot and reached the local HTTP token fence. A clean npm staging install of the override could not be verified on the trial host, and the current default profile was not repaired during this run. Keep the existing managed program tree until a staged install passes the installer's health check; never replace it by hand.
+
 ### Automated GitHub releases
 
-Pushing a `vX.Y.Z` tag whose version matches `apps/desktop/package.json` starts `.github/workflows/desktop-release.yml`. Separate native runners build unsigned macOS Apple Silicon DMG/ZIP and Windows x64 NSIS/ZIP files; the workflow creates or updates the matching GitHub Release only after both builds succeed. A version mismatch or missing artifact fails the workflow before publication.
+Pushing a `vX.Y.Z` tag whose version matches `apps/desktop/package.json` and points into `main` history starts `.github/workflows/desktop-release.yml`. Native runners build macOS Apple Silicon DMG/ZIP and Windows x64 NSIS/ZIP files. macOS artifacts use an ad hoc signature only and are not Developer ID signed or notarized. Windows release signing requires a PFX, password, exact expected publisher Subject, and RFC 3161 timestamp configuration; the installer and app executable must pass trusted Authenticode verification before upload. A missing signing input or verification failure blocks publication. The Release is drafted, its explicit asset manifest and SHA-256 hashes are verified, then it is published without overwriting mismatched existing assets. Desktop updater metadata is not published.
 
 ### Signed macOS DMG
 
@@ -129,7 +145,7 @@ rmdir "$MOUNT_POINT"
 
 The first desktop assembly uses a loopback HTTP Host. The renderer and Host protocol remain unchanged so the application can replace the transport with the IPC carrier reserved by the GUI architecture without changing product features.
 
-GitHub Actions publishes unsigned macOS and Windows installers. The credential-backed signed installer path currently targets macOS; Windows signing and Linux release packaging remain release work.
+GitHub Actions requires trusted Authenticode signing for Windows x64 releases and fails closed while those credentials are unavailable. The unsigned Windows 1.0.5 local-trial command above is for local testing only. macOS release artifacts remain ad hoc signed, without Developer ID distribution signing or notarization. Linux release packaging is not a current target.
 
 The local Electron scenario verifies Desktop lifecycle and storage policy, not compatibility with the live DeepSeek website. DeepSeek can change authentication origins, WAF behavior, page requirements, or embedding policy independently. No login method is release-qualified until the following smoke procedure passes on both macOS and Windows:
 

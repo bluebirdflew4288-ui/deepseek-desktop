@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, readdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { managedProcessEnvironment } from '../src/managed-harness-process.ts'
 
 const desktopRoot = resolve(import.meta.dirname, '..')
 
@@ -89,7 +90,8 @@ export async function assertNpmRuntime(
   const reported = await new Promise<string>((accept, reject) => {
     let output = ''
     const child = spawn(electronExecutable, [join(npm, pin.cliEntry), '--version'], {
-      env: { HOME: process.env.HOME ?? '', PATH: '/usr/bin:/bin:/usr/sbin:/sbin', ELECTRON_RUN_AS_NODE: '1' },
+      env: managedProcessEnvironment({ ELECTRON_RUN_AS_NODE: '1' }),
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })

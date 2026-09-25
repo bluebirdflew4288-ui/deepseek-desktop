@@ -7,8 +7,9 @@
  * user needs after a failure stays here; the shell surfaces a short message.
  */
 
-import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises'
+import { appendFile, lstat, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { assertSafeRegularFile, ensureSafeDirectoryTree } from './managed-harness-files.ts'
 
 /** Cap on one log file before it rotates. */
 const DEFAULT_MAX_BYTES = 1_048_576
@@ -56,6 +57,8 @@ export interface ManagedHarnessDiagnostics {
 export interface ManagedHarnessDiagnosticsOptions {
   /** Log file path. */
   readonly file: string
+  /** Trusted profile/program base containing the managed log path. */
+  readonly trustedAnchor?: string
   /** Cap on one file before it rotates to a single backup. */
   readonly maxBytes?: number
   /** Clock producing each entry's timestamp. */
@@ -85,11 +88,17 @@ export function createManagedHarnessDiagnostics(options: ManagedHarnessDiagnosti
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
   const now = options.now ?? (() => new Date())
   const backup = `${options.file}.1`
+  const trustedAnchor = options.trustedAnchor ?? dirname(dirname(options.file))
   return {
     async record(entry) {
       const line = `${JSON.stringify({ time: now().toISOString(), ...entry })}\n`
-      await mkdir(dirname(options.file), { recursive: true, mode: 0o700 })
-      const size = await stat(options.file).then(metadata => metadata.size, () => 0)
+      await ensureSafeDirectoryTree(dirname(options.file), trustedAnchor)
+      await assertSafeRegularFile(options.file, trustedAnchor, true)
+      await assertSafeRegularFile(backup, trustedAnchor, true)
+      const size = await lstat(options.file).then(metadata => metadata.size, (error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+        throw error
+      })
       if (size > 0 && size + line.length > maxBytes) {
         await rm(backup, { force: true })
         await rename(options.file, backup).catch(() => undefined)

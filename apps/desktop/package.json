@@ -8,13 +8,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json",
-    "test:electron": "vitest run --root ../.. apps/desktop/tests/dual-mode.electron.spec.ts",
+    "test:electron": "pnpm --workspace-root run build:lib && pnpm run build && vitest run --root ../.. apps/desktop/tests/deepseek-memory.electron.spec.ts apps/desktop/tests/dual-mode.electron.spec.ts",
     "dev": "pnpm --workspace-root run build && electron .",
     "materialize:electron": "node node_modules/electron/install.js",
     "stage:npm": "node --import tsx scripts/stage-npm.ts",
-    "package": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --dir",
-    "dist": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder",
-    "dist:mac": "node --import tsx scripts/release-mac.ts"
+    "package": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --dir && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build-if-windows",
+    "dist": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build-if-windows",
+    "dist:mac": "node --import tsx scripts/release-mac.ts",
+    "dist:win": "pnpm --workspace-root run build && node --import tsx scripts/stage-npm.ts && pnpm run materialize:electron && electron-builder --win nsis zip --x64 --publish never && node --import tsx scripts/verify-packaged-runtime.ts --windows-post-build"
   },
   "license": "MIT",
   "dependencies": {
@@ -36,6 +37,7 @@
     "electronDist": "node_modules/electron/dist",
     "afterPack": "./scripts/verify-packaged-runtime.ts",
     "asar": true,
+    "artifactName": "DeepSeek-Desktop-${version}-${os}-${arch}.${ext}",
     "asarUnpack": [
       "lib/shell-preload.cjs",
       "lib/mode-chrome-preload.cjs",
@@ -77,6 +79,15 @@
       "target": [
         "dir"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false,
+      "deleteAppDataOnUninstall": false
     }
   }
 }

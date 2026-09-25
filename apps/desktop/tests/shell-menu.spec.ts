@@ -1,6 +1,7 @@
 /** The shell settings model both the application menu and the tray render. */
 
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/desktop-notifications.ts'
 import { shellMenuModel, shellSettingsGroups, type DesktopShellPreferences } from '../src/shell-menu.ts'
 
 const ZH: DesktopShellPreferences = { theme: 'system', locale: 'zh-CN' }
@@ -50,6 +51,18 @@ describe('the language group', () => {
 })
 
 describe('the whole menu model', () => {
+  it('omits the macOS-only Dock switch on Windows without changing stored preferences', () => {
+    const preferences = { ...ZH, notifications: { ...DEFAULT_NOTIFICATION_PREFERENCES, dock: false } }
+    const windowsChoices = shellMenuModel(preferences, 'win32').groups[2]!.choices
+    const macChoices = shellMenuModel(preferences, 'darwin').groups[2]!.choices
+
+    expect(windowsChoices.map(choice => choice.label)).not.toContain('显示 Dock 未读数量')
+    expect(windowsChoices.map(choice => choice.label)).toContain('Chat 回复')
+    expect(windowsChoices.map(choice => choice.label)).toContain('显示站内未读提示')
+    expect(macChoices.find(choice => choice.label === '显示 Dock 未读数量')?.checked).toBe(false)
+    expect(preferences.notifications.dock).toBe(false)
+  })
+
   it('holds both groups and the window items, in the active locale', () => {
     const model = shellMenuModel(ZH)
     expect(model.openMainWindow).toBe('打开主窗口')

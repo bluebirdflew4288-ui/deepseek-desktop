@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 /** Retained tail of one child's combined output. */
 const MAX_PROCESS_OUTPUT_CHARS = 32_768
 
-/** Grace between SIGTERM and SIGKILL when a child overruns its bound. */
+/** Grace between SIGTERM and SIGKILL where the host can deliver both signals. */
 export const KILL_GRACE_MS = 5_000
 
 /**
@@ -42,6 +42,15 @@ export function managedProcessEnvironment(extra: Record<string, string> = {}): N
     HOME: home,
     USERPROFILE: home,
     PATH: managedSearchPath(),
+    ...(process.platform === 'win32' ? {
+      SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+      WINDIR: process.env.SystemRoot ?? 'C:\\Windows',
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      APPDATA: process.env.APPDATA,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      ComSpec: `${process.env.SystemRoot ?? 'C:\\Windows'}\\system32\\cmd.exe`,
+    } : {}),
     ...(process.env.TMPDIR === undefined ? {} : { TMPDIR: process.env.TMPDIR }),
     ...extra,
   }
@@ -69,6 +78,8 @@ export interface ManagedProcessRequest {
   readonly env: NodeJS.ProcessEnv
   /** Bound before the child is terminated. */
   readonly timeoutMs: number
+  /** Observe each stdout or stderr chunk as the parent receives it. */
+  readonly onOutput?: (chunk: string) => void
   /**
    * Abandoning signal. Aborting terminates the child the way an overrun does:
    * `SIGTERM`, then `SIGKILL` one grace period later. A caller may abort only a
@@ -84,10 +95,12 @@ export type ManagedProcessRunner = (request: ManagedProcessRequest) => Promise<M
 /**
  * Run one child process to completion with a bounded output tail.
  *
- * The child is terminated at `timeoutMs` and killed one grace period later, so
- * an operation that stalls cannot hold a transaction open indefinitely. An
- * aborting `signal` produces the same escalation on request rather than on
- * elapsed time, and the promise still settles with the child's exit outcome.
+ * The child is terminated at `timeoutMs` and killed one grace period later on
+ * hosts that deliver SIGTERM to the child. Windows Node terminates the process
+ * immediately for named signals, so JavaScript signal handlers are not part of
+ * the Windows contract. An aborting `signal` produces the same termination on
+ * request rather than on elapsed time, and the promise still settles with the
+ * child's exit outcome.
  * @param request - Executable, arguments, environment, bound, and abort signal.
  * @returns The exit outcome and the retained output tail.
  */
@@ -102,9 +115,11 @@ export function runManagedProcess(request: ManagedProcessRequest): Promise<Manag
       windowsHide: true,
     })
     const append = (chunk: string | Buffer): void => {
-      const combined = `${output}${chunk.toString()}`
+      const text = chunk.toString()
+      const combined = `${output}${text}`
       outputTruncated ||= combined.length > MAX_PROCESS_OUTPUT_CHARS
       output = combined.slice(-MAX_PROCESS_OUTPUT_CHARS)
+      request.onOutput?.(text)
     }
     child.stdout.on('data', append)
     child.stderr.on('data', append)
@@ -141,7 +156,10 @@ export function runManagedProcess(request: ManagedProcessRequest): Promise<Manag
  * @returns Environment loading a parent-death watchdog before the CLI entry.
  */
 export function parentBoundEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const script = `delete process.env.NODE_OPTIONS;const parent=${process.pid};const timer=setInterval(()=>{if(process.ppid!==parent){clearInterval(timer);setTimeout(()=>process.kill(process.pid,'SIGKILL'),5000).unref();process.kill(process.pid,'SIGTERM')}},250);timer.unref()`
+  const parentGone = process.platform === 'win32'
+    ? 'let gone=false;try{process.kill(parent,0)}catch(error){if(error.code===\'ESRCH\')gone=true}'
+    : 'const gone=process.ppid!==parent'
+  const script = `delete process.env.NODE_OPTIONS;const parent=${process.pid};const timer=setInterval(()=>{${parentGone};if(gone){clearInterval(timer);setTimeout(()=>process.kill(process.pid,'SIGKILL'),5000).unref();process.kill(process.pid,'SIGTERM')}},250);timer.unref()`
   const guard = `--import=data:text/javascript,${encodeURIComponent(script).replaceAll("'", '%27')}`
   return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ''} ${guard}`.trim() }
 }
