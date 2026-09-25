@@ -55,7 +55,7 @@ Host 启动失败、Host 意外退出或 Harness renderer 失败时，只会把 
 
 ### Desktop 通知
 
-应用和托盘设置提供 Chat 回复、Harness 完成/失败/等待操作、Dock 数量、站内提示及普通通知强调色（主题、DeepSeek、蓝色、紫色、绿色或自定义颜色）。失败保持红色，等待操作保持琥珀色。未读圆点位于 Desktop 的 Chat/Harness 切换入口，无障碍标签也包含数量。关闭展示不会标记已读。
+应用和托盘设置提供 Chat 回复、Harness 完成/失败/等待操作、站内提示及普通通知强调色（主题、DeepSeek、蓝色、紫色、绿色或自定义颜色）。macOS 还提供 Dock 数量设置；Windows 菜单不显示该项。失败保持红色，等待操作保持琥珀色。未读圆点位于 Desktop 的 Chat/Harness 切换入口，无障碍标签也包含数量。关闭展示不会标记已读。
 
 Chat 与 Harness 的来源级 attention 在浅色和深色主题下共用固定通知红（`#ff3b30`），独立于选中状态和普通通知强调色。来源切换入口保留该布尔圆点；macOS Dock 数字把持久化的 Chat 与 Harness pending 数量相加，每个未见结果计一次，显式进入某一来源只清除该来源的计数，点击通知也属于显式进入。关闭 Dock 展示只隐藏数字，不丢弃提示，普通未读不会进入该数字，数字也会跨重启恢复。Chat attention 由已审计的 completion、regenerate、continue 端点成功完成触发；用户主动 stop 的生成不会被播报。
 

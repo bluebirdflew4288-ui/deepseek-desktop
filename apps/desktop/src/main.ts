@@ -607,7 +607,7 @@ function trayTemplate(model: ShellMenuModel): MenuItemConstructorOptions[] {
 
 /** Re-render both shell menus from the single preference authority. */
 function applyShellMenus(): void {
-  const model = shellMenuModel(currentPreferences())
+  const model = shellMenuModel(currentPreferences(), process.platform)
   const menu = Menu.buildFromTemplate(applicationMenuTemplate(model, {
     memory: runMemoryAction, memoryReady: currentMemoryStatus().phase === 'ready',
     harness: harnessMenuTemplate(model.strings), settings: model.groups.map(settingsSubmenu),

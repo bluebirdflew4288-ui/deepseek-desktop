@@ -79,9 +79,13 @@ export interface ShellMenuModel {
 /**
  * Build the settings groups for one preference value.
  * @param preferences - current value of the single desktop preference authority.
+ * @param platform - host platform, used to omit macOS-only presentation controls elsewhere.
  * @returns the appearance and language groups, each marking the active choice.
  */
-export function shellSettingsGroups(preferences: DesktopShellPreferences): ShellSettingsGroup[] {
+export function shellSettingsGroups(
+  preferences: DesktopShellPreferences,
+  platform: NodeJS.Platform = process.platform,
+): ShellSettingsGroup[] {
   const strings = shellStrings(preferences.locale)
   const p = preferences.notifications ?? DEFAULT_NOTIFICATION_PREFERENCES
   const zh = preferences.locale === 'zh-CN'
@@ -90,7 +94,7 @@ export function shellSettingsGroups(preferences: DesktopShellPreferences): Shell
     ['completed', zh ? 'Harness 完成' : 'Harness completed'],
     ['failed', zh ? 'Harness 失败' : 'Harness failed'],
     ['actionRequired', zh ? 'Harness 等待操作' : 'Harness action required'],
-    ['dock', zh ? '显示 Dock 未读数量' : 'Show Dock unread count'],
+    ...(platform === 'darwin' ? [['dock', zh ? '显示 Dock 未读数量' : 'Show Dock unread count'] as const] : []),
     ['indicators', zh ? '显示站内未读提示' : 'Show in-app unread indicators'],
   ] as const
   return [
@@ -127,14 +131,15 @@ export function shellSettingsGroups(preferences: DesktopShellPreferences): Shell
 /**
  * Build the whole shell menu model for one preference value.
  * @param preferences - current value of the single desktop preference authority.
+ * @param platform - host platform of the application and tray menus.
  * @returns the labels and settings groups both shell menus render.
  */
-export function shellMenuModel(preferences: DesktopShellPreferences): ShellMenuModel {
+export function shellMenuModel(preferences: DesktopShellPreferences, platform: NodeJS.Platform = process.platform): ShellMenuModel {
   const strings = shellStrings(preferences.locale)
   return {
     openMainWindow: strings.openMainWindow,
     settings: strings.settings,
-    groups: shellSettingsGroups(preferences),
+    groups: shellSettingsGroups(preferences, platform),
     quit: strings.quit,
     strings,
   }

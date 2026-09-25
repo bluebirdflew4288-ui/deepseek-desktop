@@ -55,7 +55,7 @@ Native chrome follows the host platform. macOS uses a frameless inset title bar,
 
 ### Desktop notifications
 
-Application and tray settings control Chat replies, Harness completion/failure/action requests, Dock counts, in-app indicators, and ordinary notification accent (theme, DeepSeek, blue, purple, green, or custom color). Failure stays red and action requests stay amber. Unread dots belong to the Desktop Chat/Harness switch; counts also appear in accessible labels. Disabling presentation does not mark anything read.
+Application and tray settings control Chat replies, Harness completion/failure/action requests, in-app indicators, and ordinary notification accent (theme, DeepSeek, blue, purple, green, or custom color). On macOS they also control Dock counts; Windows omits that menu choice. Failure stays red and action requests stay amber. Unread dots belong to the Desktop Chat/Harness switch; counts also appear in accessible labels. Disabling presentation does not mark anything read.
 
 Source attention uses the same fixed notification red (`#ff3b30`) for Chat and Harness in light and dark themes, independently of selection and ordinary notification accent. The source switch keeps that boolean dot; the macOS Dock number adds the persisted Chat and Harness pending counts, one per unseen result, and explicit entry into a source clears only that source's count. A notification click is also an explicit entry. The Dock setting hides the number without discarding the reminder, ordinary unread never feeds it, and it survives restart. Chat attention is raised by the audited completion, regenerate, and continue endpoints finishing successfully; a generation the user stops is never announced.
 
