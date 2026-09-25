@@ -282,6 +282,45 @@ describe('desktop application composition', () => {
     expect(application.snapshot()?.harness.phase).toBe('ready')
   })
 
+  it('relayouts the mode chrome when a minimized Windows window is restored', async () => {
+    const filename = await stateFile()
+    const window = new FakeWindow()
+    const chrome = fakeView()
+    const harness = fakeView()
+    const ipc = new FakeIpc()
+    const host = fakeHost(() => Promise.resolve({ origin: 'http://127.0.0.1:4173' }))
+    const { options } = applicationOptions({
+      stateFile: filename,
+      window,
+      views: [chrome.view, harness.view],
+      host,
+      ipc,
+      platform: 'win32',
+    })
+    const application = createDesktopApplication(options)
+    await application.start()
+    await vi.waitFor(() => {
+      expect(harness.value.setBounds).toHaveBeenCalledWith({ x: 0, y: 44, width: 1200, height: 756 })
+    })
+    const chromeBounds = (): unknown => chrome.value.setBounds.mock.lastCall?.[0]
+    expect(chromeBounds()).toEqual({ x: 72, y: 6, width: 164, height: 32 })
+    // A minimized placement hands every layout pass a zero-size content rectangle,
+    // exactly what a Windows iconic window reports from getContentBounds().
+    window.getContentBounds.mockReturnValue({ x: -25593, y: -25600, width: 0, height: 0 })
+    vi.spyOn(window, 'isMinimized').mockReturnValue(true)
+    ipc.dispatch(DESKTOP_SHELL_CHANNELS.chromeSurface, 'closed', chrome.contents)
+    expect(chromeBounds()).toEqual({ x: 72, y: 6, width: 0, height: 0 })
+    // Windows restores with restore/show/focus and emits no resize at all, so the
+    // restore listener is the only thing that can give the chrome a usable rectangle.
+    window.getContentBounds.mockReturnValue({ x: 20, y: 30, width: 1200, height: 800 })
+    vi.spyOn(window, 'isMinimized').mockReturnValue(false)
+    window.emit('restore')
+    window.emit('show')
+    window.emit('focus')
+    expect(chromeBounds()).toEqual({ x: 72, y: 6, width: 164, height: 32 })
+    expect(harness.value.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 44, width: 1200, height: 756 })
+  })
+
   it('applies expanded chrome bounds before acknowledging the requested surface', async () => {
     const filename = await stateFile()
     const window = new FakeWindow()

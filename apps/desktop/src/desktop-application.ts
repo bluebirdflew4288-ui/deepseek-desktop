@@ -837,11 +837,19 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     windowListenerDisposers.push(() => { nativeWindow.off('restore', onVisibility) })
 
     const onClose = (event: Event): void => { lifecycle.onWindowClose(event) }
-    const onResize = (): void => {
+    // One layout refresh for every event after which the window's usable rectangle
+    // must be re-measured. Windows restores a minimized window with `restore`, `show`
+    // and `focus` but emits no `resize`, and a layout pass that ran while the window
+    // was minimized measured a zero-size content rectangle; without a refresh on
+    // restore the mode chrome would keep that collapsed rectangle until the user
+    // resized the window by hand.
+    const refreshWindowLayout = (): void => {
       const bounds = contentBounds(nativeWindow)
       setChromeBounds()
       controller?.resize(bounds)
     }
+    const onResize = (): void => { refreshWindowLayout() }
+    const onRestoreLayout = (): void => { refreshWindowLayout() }
     const onClosed = (): void => {
       removeWindowListeners()
       for (const contents of commandWContents) unbindCommandW(contents)
@@ -855,10 +863,12 @@ export function createDesktopApplication(options: DesktopApplicationOptions): De
     }
     nativeWindow.on('close', onClose)
     nativeWindow.on('resize', onResize)
+    nativeWindow.on('restore', onRestoreLayout)
     nativeWindow.on('closed', onClosed)
     windowListenerDisposers.push(
       () => { nativeWindow.off('close', onClose) },
       () => { nativeWindow.off('resize', onResize) },
+      () => { nativeWindow.off('restore', onRestoreLayout) },
       () => { nativeWindow.off('closed', onClosed) },
     )
     const stopSystemTheme = options.systemTheme.subscribe(() => {
