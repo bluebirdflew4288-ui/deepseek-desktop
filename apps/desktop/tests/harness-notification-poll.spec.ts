@@ -189,6 +189,73 @@ describe('consumed-event contract', () => {
   })
 })
 
+describe('waiting-for-user approval mapping', () => {
+  // `approval/asked` without its matching `approval/decided` is the runtime's own durable
+  // evidence that the session is waiting on the user; the ask's seq is the occurrence id.
+  it('reports one action-required occurrence for an unanswered ask', async () => {
+    const f = fixture(); await f.poller.poll()
+    f.set(5, [record('turn/start', 1, { turn: 1 }), prompt(2),
+      record('approval/asked', 3, { id: 'approval-1', toolName: 'bash' }),
+      record('tool/call', 4, {}), record('tool/result', 5, {})])
+    await f.poller.poll()
+    expect(f.receive).toHaveBeenCalledOnce()
+    expect(f.receive).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'harness:root:3', kind: 'action-required', targetId: 'root',
+      occurredAt: 1003, topLevel: true, presentation: 'background-only',
+    }))
+  })
+  it('stays silent for a decided ask and never reports the decision as a new occurrence', async () => {
+    const f = fixture(); await f.poller.poll()
+    f.set(3, [record('approval/asked', 2, { id: 'approval-1' }), record('approval/decided', 3, { id: 'approval-1', outcome: 'allowed-once' })])
+    await f.poller.poll()
+    f.set(4, [record('todo/write', 4, {})])
+    await f.poller.poll()
+    expect(f.receive).not.toHaveBeenCalled()
+  })
+  it('does not replay an ask observed before the watermark and ignores an unreadable identity', async () => {
+    const pending = fixture()
+    pending.set(2, [record('approval/asked', 2, { id: 'approval-1' })])
+    await pending.poller.poll()
+    expect(pending.receive).not.toHaveBeenCalled()
+    pending.set(3, [record('approval/asked', 2, { id: 'approval-1' }), record('todo/write', 3, {})])
+    await pending.poller.poll()
+    expect(pending.receive).not.toHaveBeenCalled()
+
+    const unreadable = fixture(); await unreadable.poller.poll()
+    unreadable.set(3, [record('approval/asked', 2, {}), record('approval/asked', 3, { id: '' })])
+    await unreadable.poller.poll()
+    expect(unreadable.receive).not.toHaveBeenCalled()
+  })
+  it('reports only the still-pending ask when one decision settles another', async () => {
+    const f = fixture(); await f.poller.poll()
+    f.set(4, [record('approval/asked', 1, { id: 'a-1' }), record('approval/asked', 2, { id: 'a-2' }),
+      record('approval/decided', 3, { id: 'a-1', outcome: 'rejected' }), record('todo/write', 4, {})])
+    await f.poller.poll()
+    expect(f.receive).toHaveBeenCalledOnce()
+    expect(f.receive).toHaveBeenCalledWith(expect.objectContaining({ id: 'harness:root:2', kind: 'action-required' }))
+  })
+  it('raises no source dot for a pending ask and still hands it to the native adapter', async () => {
+    const { createDesktopNotifications, DEFAULT_NOTIFICATION_PREFERENCES } = await import('../src/desktop-notifications.ts')
+    const adapter = { supported: () => true, show: vi.fn(), setDockBadge: vi.fn(), dispose: vi.fn() }
+    const notifications = createDesktopNotifications({
+      initial: { preferences: DEFAULT_NOTIFICATION_PREFERENCES, events: [] },
+      visibility: () => ({ focused: false, visible: false, minimized: false, source: 'chat' }),
+      adapter, save: async () => {}, open: async () => {}, publish: () => {}, reportError: () => {},
+    })
+    const f = fixture()
+    const poller = createHarnessNotificationPoll({ rpc: f.rpc, receive: event => notifications.receive(event), allowCompleted: true })
+    await poller.poll()
+    f.set(1, [record('approval/asked', 1, { id: 'approval-1' })])
+    await poller.poll()
+    const state = notifications.snapshot()
+    expect(state.events).toHaveLength(1)
+    expect(state.events[0]?.delivery).toBe('attempted')
+    expect(state.harnessAttention ?? false).toBe(false)
+    expect(state.harnessPendingCount ?? 0).toBe(0)
+    expect(adapter.show).toHaveBeenCalledOnce()
+  })
+})
+
 describe('receiver hand-off', () => {
   // One Harness completion must land as exactly one receipt, one source reminder, and one
   // pending count, read through the same envelope the runtime sends.
