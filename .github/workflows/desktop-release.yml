@@ -68,6 +68,7 @@ jobs:
               apps/desktop/dist/DeepSeek-Desktop-*-win-x64.exe
               apps/desktop/dist/DeepSeek-Desktop-*-win-x64.zip
               apps/desktop/release-manifest.json
+              apps/desktop/windows-signing-manifest.json
 
     steps:
       - name: Check out source
@@ -117,7 +118,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node --import tsx scripts/release-assets.ts write-platform-manifest --platform mac-arm64 --tag "$RELEASE_TAG" --dist dist --output release-manifest.json
 
-      - name: Build and verify signed Windows x64 distributables
+      - name: Build and verify Windows x64 distributables (signed or unsigned)
         if: matrix.platform == 'win'
         working-directory: apps/desktop
         env:

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   expectedDesktopAssetNames,
   planAssetSync,
+  windowsSigningReleaseNotes,
   writePlatformManifest,
   type ReleaseAsset,
 } from '../scripts/release-assets.ts'
@@ -73,5 +74,16 @@ describe('desktop release asset manifests', () => {
     expect(() => planAssetSync([asset], [{ name: asset.name }, { name: asset.name }], new Map(), true))
       .toThrow('duplicate asset name')
     expect(() => planAssetSync([asset], [], new Map(), false)).toThrow('Published Release is missing')
+  })
+
+  it('renders truthful signed and unsigned Windows release notes', () => {
+    expect(windowsSigningReleaseNotes('unsigned')).toEqual({
+      en: 'Unsigned / NotSigned. The Windows x64 installer and application executable are not Authenticode-signed. Windows Defender SmartScreen may display an "Unknown publisher" or "Windows protected your PC" warning. This is a publisher/reputation warning, not a malware detection, and Windows Defender will not necessarily block the application. Download only from this repository\'s official GitHub Release and verify the SHA-256 hashes below.',
+      zh: 'Unsigned / NotSigned。Windows x64 安装程序与应用可执行文件当前未使用 Authenticode 代码签名。Windows Defender SmartScreen 可能提示“未知发布者”或“Windows 已保护你的电脑”。这是发布者/信誉警告，不表示 malware detection，也不意味着 Windows Defender 一定会拦截。请仅从本仓库官方 GitHub Release 下载，并使用下方 SHA-256 校验值。',
+    })
+    expect(windowsSigningReleaseNotes('signed')).toEqual({
+      en: 'Authenticode-signed installer and application executable; the trusted certificate chain, exact publisher Subject, and RFC 3161 timestamp were verified before release.',
+      zh: '安装程序与应用可执行文件均通过 Authenticode 签名；发布前已验证可信证书链、完整 Publisher Subject 精确匹配和 RFC 3161 时间戳。',
+    })
   })
 })
