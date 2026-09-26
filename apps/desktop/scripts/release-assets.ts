@@ -42,6 +42,15 @@ export interface WindowsSigningManifest {
   readonly authenticode: 'Valid' | 'NotSigned'
 }
 
+export interface ReleaseSyncApi {
+  readonly findRelease: (repo: string, tag: string) => Record<string, unknown> | undefined
+  readonly createDraft: (repo: string, tag: string, title: string, body: string) => Record<string, unknown>
+  readonly listAssets: (repo: string, releaseId: number) => RemoteReleaseAsset[]
+  readonly downloadHash: (repo: string, tag: string, name: string, directory: string) => string
+  readonly upload: (repo: string, tag: string, path: string) => void
+  readonly publish: (repo: string, releaseId: number, body: string) => void
+}
+
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
 const LEGACY_V105_TOOLING_COMMIT = 'bb7e18bbe632507e51822f11c2ee77e6297e1199'
 
@@ -232,6 +241,22 @@ function releaseAssets(repo: string, id: number): RemoteReleaseAsset[] {
   return JSON.parse(runGh(['api', `repos/${repo}/releases/${id}/assets`])) as RemoteReleaseAsset[]
 }
 
+function createDraftRelease(repo: string, tag: string, title: string, body: string): Record<string, unknown> {
+  const response = JSON.parse(runGh([
+    'api', '-X', 'POST', `repos/${repo}/releases`,
+    '-f', `tag_name=${tag}`,
+    '-f', `name=${title}`,
+    '-f', `body=${body}`,
+    '-F', 'draft=true',
+    '-F', 'prerelease=false',
+  ])) as Record<string, unknown>
+  if (typeof response.id !== 'number' || response.tag_name !== tag || response.draft !== true
+    || response.prerelease !== false || response.body !== body) {
+    throw new Error('GitHub did not return the created draft Release')
+  }
+  return response
+}
+
 function downloadedHash(repo: string, tag: string, name: string, directory: string): string {
   const result = spawnSync('gh', ['release', 'download', tag, '--repo', repo, '--dir', directory, '--pattern', name], {
     encoding: 'utf8', windowsHide: true,
@@ -240,6 +265,15 @@ function downloadedHash(repo: string, tag: string, name: string, directory: stri
   const path = join(directory, name)
   if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`Existing Release asset download is missing: ${name}`)
   return hashFile(path)
+}
+
+function uploadReleaseAsset(repo: string, tag: string, path: string): void {
+  // No --clobber: duplicate names or a concurrent upload fail closed.
+  runGh(['release', 'upload', tag, path, '--repo', repo])
+}
+
+function publishRelease(repo: string, id: number, body: string): void {
+  runGh(['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `body=${body}`, '-F', 'draft=false'])
 }
 
 function readExpectedAssets(root: string, tag: string): ReleaseAsset[] {
@@ -268,7 +302,19 @@ function readExpectedAssets(root: string, tag: string): ReleaseAsset[] {
   return assets
 }
 
-async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
+const githubReleaseSyncApi: ReleaseSyncApi = {
+  findRelease: releaseJson,
+  createDraft: createDraftRelease,
+  listAssets: releaseAssets,
+  downloadHash: downloadedHash,
+  upload: uploadReleaseAsset,
+  publish: publishRelease,
+}
+
+export async function syncDesktopRelease(
+  args: ReadonlyMap<string, string>,
+  api: ReleaseSyncApi = githubReleaseSyncApi,
+): Promise<void> {
   const tag = required(args, 'tag')
   const repo = required(args, 'repo')
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) throw new Error('Invalid GitHub repository identity')
@@ -290,11 +336,11 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
   )
 
   const expectedSigningDetails = windowsSigningReleaseNotes(windowsSigningManifest.mode).en
-  let release = releaseJson(repo, tag)
+  let release = api.findRelease(repo, tag)
   if (release === undefined) {
-    runGh(['release', 'create', tag, '--repo', repo, '--draft', '--title', `DeepSeek Desktop ${tag}`, '--notes', notes])
-    release = releaseJson(repo, tag)
-    if (release === undefined) throw new Error('Draft GitHub Release was not created')
+    // Use the create response directly: a just-created draft may not yet be
+    // visible to either release lookup endpoint.
+    release = api.createDraft(repo, tag, `DeepSeek Desktop ${tag}`, notes)
   }
   const id = release.id
   if (typeof id !== 'number' || typeof release.draft !== 'boolean') throw new Error('GitHub Release response is incomplete')
@@ -307,7 +353,7 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
     && !canReusePublishedV105Release(release, tag)) {
     throw new Error('Existing Release commit provenance differs from this tag run')
   }
-  const currentAssets = releaseAssets(repo, id)
+  const currentAssets = api.listAssets(repo, id)
   const temp = mkdtempSync(join(tmpdir(), 'deepseek-desktop-release-'))
   const existingDir = join(temp, 'existing')
   const verifiedDir = join(temp, 'verified')
@@ -317,26 +363,25 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
     const remoteHashes = new Map<string, string>()
     for (const asset of expected) {
       if (currentAssets.some(existing => existing.name === asset.name)) {
-        remoteHashes.set(asset.name, downloadedHash(repo, tag, asset.name, existingDir))
+        remoteHashes.set(asset.name, api.downloadHash(repo, tag, asset.name, existingDir))
       }
     }
     const plan = planAssetSync(expected, currentAssets, remoteHashes, isDraft)
     for (const asset of plan.upload) {
-      // No --clobber: duplicate names or a concurrent upload fail closed.
-      runGh(['release', 'upload', tag, asset.path, '--repo', repo])
+      api.upload(repo, tag, asset.path)
     }
 
-    const verifiedAssets = releaseAssets(repo, id)
+    const verifiedAssets = api.listAssets(repo, id)
     for (const asset of expected) {
       if (!verifiedAssets.some(existing => existing.name === asset.name)) {
         throw new Error(`Release asset is absent after upload: ${asset.name}`)
       }
-      const actual = downloadedHash(repo, tag, asset.name, verifiedDir)
+      const actual = api.downloadHash(repo, tag, asset.name, verifiedDir)
       if (actual !== asset.sha256) throw new Error(`Release asset SHA-256 verification failed: ${asset.name}`)
     }
     if (isDraft) {
-      runGh(['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `body=${notes}`, '-F', 'draft=false'])
-      release = releaseJson(repo, tag)
+      api.publish(repo, id, notes)
+      release = api.findRelease(repo, tag)
       if (release?.draft !== false) throw new Error('GitHub Release did not leave draft state after verification')
     }
     console.log(`Verified immutable desktop Release ${tag}: ${expected.length} assets; macOS arm64 and Windows x64.`)
@@ -359,7 +404,7 @@ function main(): void {
     return
   }
   if (command === 'sync') {
-    void syncRelease(args).catch((error) => {
+    void syncDesktopRelease(args).catch((error) => {
       console.error(error instanceof Error ? error.message : 'Desktop Release synchronization failed')
       process.exitCode = 1
     })

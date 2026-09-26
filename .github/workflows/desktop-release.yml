@@ -63,9 +63,15 @@ jobs:
             echo "release tag must exactly match desktop version $TAG_VERSION"
             exit 1
           fi
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && ( "$RELEASE_TAG" != "v1.0.5" || "$RELEASE_COMMIT" != "8cdad7930310893150976929758b29975877fb28" ) ]]; then
-            echo 'workflow_dispatch recovery is restricted to v1.0.5 at its immutable public-main commit.'
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$RELEASE_TAG:$RELEASE_COMMIT" in
+              v1.0.5:8cdad7930310893150976929758b29975877fb28|v1.0.6:77d310dbdd82cf20110ccbbc790e77ed4d5f6d01)
+                ;;
+              *)
+                echo 'workflow_dispatch recovery is restricted to explicitly allowlisted immutable release tags and commits.'
+                exit 1
+                ;;
+            esac
           fi
           git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || { echo 'Release tag commit is not in origin/main history.'; exit 1; }
           {
