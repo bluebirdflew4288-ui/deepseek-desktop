@@ -4,9 +4,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   canReuseDraftRelease,
+  canReusePublishedV105Release,
   expectedDesktopAssetNames,
   findReleaseByTag,
   planAssetSync,
+  renderDesktopReleaseNotes,
   windowsSigningReleaseNotes,
   writePlatformManifest,
   type ReleaseAsset,
@@ -99,10 +101,38 @@ describe('desktop release asset manifests', () => {
     const draft = {
       tag_name: 'v1.0.5',
       draft: true,
-      body: 'Source commit: `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`\nUnsigned / NotSigned.',
+      body: 'Application source commit: `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`\nRelease tooling commit: `abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789`\nUnsigned / NotSigned.',
     }
     expect(canReuseDraftRelease(draft, 'Unsigned / NotSigned.')).toBe(true)
     expect(canReuseDraftRelease({ ...draft, draft: false }, 'Unsigned / NotSigned.')).toBe(false)
     expect(canReuseDraftRelease(draft, 'Authenticode-signed')).toBe(false)
+    expect(canReuseDraftRelease({ ...draft, body: 'Source commit: `0123456789abcdef0123456789abcdef0123456789abcdef0123456789`' }, 'Unsigned / NotSigned.')).toBe(false)
+  })
+
+  it('allows only read-only compatibility for the published v1.0.5 legacy provenance', () => {
+    const legacy = {
+      draft: false,
+      body: 'Source commit: `bb7e18bbe632507e51822f11c2ee77e6297e1199`',
+    }
+    expect(canReusePublishedV105Release(legacy, 'v1.0.5')).toBe(true)
+    expect(canReusePublishedV105Release(legacy, 'v1.0.6')).toBe(false)
+    expect(canReusePublishedV105Release({ ...legacy, draft: true }, 'v1.0.5')).toBe(false)
+    expect(canReusePublishedV105Release({ ...legacy, body: 'Application source commit: `8cdad7930310893150976929758b29975877fb28`' }, 'v1.0.5')).toBe(false)
+  })
+
+  it('renders distinct application-source and release-tooling provenance', () => {
+    const notes = renderDesktopReleaseNotes(
+      '# {{VERSION}}\nApplication source commit: `{{APPLICATION_SOURCE_COMMIT}}`\nRelease tooling commit: `{{RELEASE_TOOLING_COMMIT}}`\n{{ASSET_HASHES}}\n{{WINDOWS_SIGNING_DETAILS}}\n{{WINDOWS_SIGNING_DETAILS_ZH}}',
+      '1.0.6',
+      '8cdad7930310893150976929758b29975877fb28',
+      'bb7e18bbe632507e51822f11c2ee77e6297e1199',
+      '- artifact: SHA-256 `abc`',
+      { en: 'unsigned', zh: '未签名' },
+    )
+    expect(notes).toContain('Application source commit: `8cdad7930310893150976929758b29975877fb28`')
+    expect(notes).toContain('Release tooling commit: `bb7e18bbe632507e51822f11c2ee77e6297e1199`')
+    expect(notes).toContain('未签名')
+    expect(() => renderDesktopReleaseNotes('template', '1.0.6', 'GITHUB_SHA', 'a'.repeat(40), '', { en: '', zh: '' }))
+      .toThrow('Invalid application source commit identity')
   })
 })

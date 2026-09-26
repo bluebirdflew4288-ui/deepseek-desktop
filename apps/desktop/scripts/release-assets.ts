@@ -43,6 +43,7 @@ export interface WindowsSigningManifest {
 }
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
+const LEGACY_V105_TOOLING_COMMIT = 'bb7e18bbe632507e51822f11c2ee77e6297e1199'
 
 export function expectedDesktopAssetNames(platform: DesktopReleasePlatform, version: string): readonly string[] {
   if (!SEMVER.test(version)) throw new Error(`Invalid desktop release version: ${version}`)
@@ -172,8 +173,43 @@ export function canReuseDraftRelease(
 ): boolean {
   return release.draft === true
     && typeof release.body === 'string'
-    && /Source commit: `(?:[0-9a-f]{40}|[0-9a-f]{64})`/iu.test(release.body)
+    && /Application source commit: `(?:[0-9a-f]{40}|[0-9a-f]{64})`/iu.test(release.body)
+    && /Release tooling commit: `(?:[0-9a-f]{40}|[0-9a-f]{64})`/iu.test(release.body)
     && release.body.includes(expectedSigningDetails)
+}
+
+/** Allow read-only verification of v1.0.5 without rewriting its published legacy notes. */
+export function canReusePublishedV105Release(release: Record<string, unknown>, tag: string): boolean {
+  return tag === 'v1.0.5'
+    && release.draft === false
+    && typeof release.body === 'string'
+    && release.body.includes(`Source commit: \`${LEGACY_V105_TOOLING_COMMIT}\``)
+}
+
+/** Render Release Notes with source provenance resolved from the immutable tag and actual tooling ref. */
+export function renderDesktopReleaseNotes(
+  template: string,
+  version: string,
+  applicationSourceCommit: string,
+  releaseToolingCommit: string,
+  assetHashes: string,
+  windowsSigningDetails: { readonly en: string; readonly zh: string },
+): string {
+  for (const [label, commit] of [
+    ['application source', applicationSourceCommit],
+    ['release tooling', releaseToolingCommit],
+  ] as const) {
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(commit)) {
+      throw new Error(`Invalid ${label} commit identity`)
+    }
+  }
+  return template
+    .replaceAll('{{VERSION}}', version)
+    .replaceAll('{{APPLICATION_SOURCE_COMMIT}}', applicationSourceCommit)
+    .replaceAll('{{RELEASE_TOOLING_COMMIT}}', releaseToolingCommit)
+    .replaceAll('{{ASSET_HASHES}}', assetHashes)
+    .replaceAll('{{WINDOWS_SIGNING_DETAILS}}', windowsSigningDetails.en)
+    .replaceAll('{{WINDOWS_SIGNING_DETAILS_ZH}}', windowsSigningDetails.zh)
 }
 
 function releaseJson(repo: string, tag: string): Record<string, unknown> | undefined {
@@ -241,17 +277,17 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
   const expected = readExpectedAssets(root, tag)
   const version = tag.slice(1)
   const windowsSigningManifest = readWindowsSigningManifest(root, version)
-  const commit = process.env.GITHUB_SHA
-  if (commit === undefined || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(commit)) {
-    throw new Error('GitHub Actions source commit identity is unavailable')
-  }
+  const applicationSourceCommit = required(args, 'application-source-commit')
+  const releaseToolingCommit = required(args, 'release-tooling-commit')
   const hashes = expected.map(asset => `- ${asset.name}: SHA-256 \`${asset.sha256}\``).join('\n')
-  const notes = readFileSync(notesTemplate, 'utf8')
-    .replaceAll('{{VERSION}}', version)
-    .replaceAll('{{COMMIT}}', commit)
-    .replaceAll('{{ASSET_HASHES}}', hashes)
-    .replaceAll('{{WINDOWS_SIGNING_DETAILS}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).en)
-    .replaceAll('{{WINDOWS_SIGNING_DETAILS_ZH}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).zh)
+  const notes = renderDesktopReleaseNotes(
+    readFileSync(notesTemplate, 'utf8'),
+    version,
+    applicationSourceCommit,
+    releaseToolingCommit,
+    hashes,
+    windowsSigningReleaseNotes(windowsSigningManifest.mode),
+  )
 
   const expectedSigningDetails = windowsSigningReleaseNotes(windowsSigningManifest.mode).en
   let release = releaseJson(repo, tag)
@@ -263,10 +299,13 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
   const id = release.id
   if (typeof id !== 'number' || typeof release.draft !== 'boolean') throw new Error('GitHub Release response is incomplete')
   const isDraft = release.draft
-  if (typeof release.body !== 'string'
-    || (!release.body.includes(`Source commit: \`${commit}\``)
-      && !canReuseDraftRelease(release, expectedSigningDetails))) {
-    throw new Error('Existing Release source commit provenance differs from this tag run')
+  const hasExpectedProvenance = typeof release.body === 'string'
+    && release.body.includes(`Application source commit: \`${applicationSourceCommit}\``)
+    && release.body.includes(`Release tooling commit: \`${releaseToolingCommit}\``)
+  if (!hasExpectedProvenance
+    && !canReuseDraftRelease(release, expectedSigningDetails)
+    && !canReusePublishedV105Release(release, tag)) {
+    throw new Error('Existing Release commit provenance differs from this tag run')
   }
   const currentAssets = releaseAssets(repo, id)
   const temp = mkdtempSync(join(tmpdir(), 'deepseek-desktop-release-'))

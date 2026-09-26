@@ -14,6 +14,8 @@ describe('desktop release workflow guardrails', () => {
     expect(workflow).toContain('git rev-parse "$RELEASE_TAG^{commit}"')
     expect(workflow).toContain('8cdad7930310893150976929758b29975877fb28')
     expect(workflow).toContain('ref: ${{ needs.verify-release-tag.outputs.release_tag }}')
+    expect(workflow).toContain('release_tooling_commit: ${{ steps.resolve-release-tag.outputs.release_tooling_commit }}')
+    expect(workflow).toContain('RELEASE_TOOLING_COMMIT="$(git rev-parse origin/main^{commit})"')
   })
 
   it('checks the exact tag and main ancestry before native builds', () => {
@@ -52,6 +54,19 @@ describe('desktop release workflow guardrails', () => {
     expect(workflow).toContain('desktop-windows-x64')
     expect(workflow).toContain('scripts/release-assets.ts sync')
     expect(workflow).not.toContain('--clobber')
+  })
+
+  it('verifies the built DMG and sends both immutable provenance refs to release notes', () => {
+    expect(workflow).toContain('scripts/verify-mac-dmg.ts dist/DeepSeek-Desktop-*-mac-arm64.dmg')
+    expect(workflow).toContain('APPLICATION_SOURCE_COMMIT: ${{ needs.verify-release-tag.outputs.release_commit }}')
+    expect(workflow).toContain('RELEASE_TOOLING_COMMIT: ${{ needs.verify-release-tag.outputs.release_tooling_commit }}')
+    expect(workflow).toContain('--application-source-commit "$APPLICATION_SOURCE_COMMIT"')
+    expect(workflow).toContain('--release-tooling-commit "$RELEASE_TOOLING_COMMIT"')
+    expect(workflow).not.toContain('GITHUB_SHA')
+    expect(notes).toContain('Application source commit: `{{APPLICATION_SOURCE_COMMIT}}`')
+    expect(notes).toContain('Release tooling commit: `{{RELEASE_TOOLING_COMMIT}}`')
+    expect(notes).toContain('Gatekeeper')
+    expect(notes).toContain('Gatekeeper 提示')
   })
 
   it('installs tsx dependencies before the release synchronizer without widening token scope', () => {

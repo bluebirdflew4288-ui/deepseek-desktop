@@ -29,6 +29,7 @@ jobs:
     outputs:
       release_tag: ${{ steps.resolve-release-tag.outputs.release_tag }}
       release_commit: ${{ steps.resolve-release-tag.outputs.release_commit }}
+      release_tooling_commit: ${{ steps.resolve-release-tag.outputs.release_tooling_commit }}
     steps:
       - name: Check out complete history
         uses: actions/checkout@v6
@@ -47,8 +48,16 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           git fetch origin --tags --no-recurse-submodules
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            git fetch origin main --no-recurse-submodules
+          fi
           test -n "$RELEASE_TAG"
           RELEASE_COMMIT="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            RELEASE_TOOLING_COMMIT="$(git rev-parse origin/main^{commit})"
+          else
+            RELEASE_TOOLING_COMMIT="$RELEASE_COMMIT"
+          fi
           TAG_VERSION="$(git show "$RELEASE_TAG:apps/desktop/package.json" | node -e "const fs=require('node:fs'); process.stdout.write(JSON.parse(fs.readFileSync(0,'utf8')).version)")"
           if [[ "$RELEASE_TAG" != "v$TAG_VERSION" ]]; then
             echo "release tag must exactly match desktop version $TAG_VERSION"
@@ -62,6 +71,7 @@ jobs:
           {
             echo "release_tag=$RELEASE_TAG"
             echo "release_commit=$RELEASE_COMMIT"
+            echo "release_tooling_commit=$RELEASE_TOOLING_COMMIT"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -142,6 +152,11 @@ jobs:
         if: matrix.platform == 'mac'
         working-directory: apps/desktop
         run: pnpm exec electron-builder --mac ${{ matrix.targets }} --${{ matrix.architecture }} --publish never ${{ matrix.builder_options }}
+
+      - name: Verify macOS DMG contents and app identity
+        if: matrix.platform == 'mac'
+        working-directory: apps/desktop
+        run: node --import tsx scripts/verify-mac-dmg.ts dist/DeepSeek-Desktop-*-mac-arm64.dmg
 
       - name: Write macOS artifact manifest
         if: matrix.platform == 'mac'
@@ -236,5 +251,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.verify-release-tag.outputs.release_tag }}
+          APPLICATION_SOURCE_COMMIT: ${{ needs.verify-release-tag.outputs.release_commit }}
+          RELEASE_TOOLING_COMMIT: ${{ needs.verify-release-tag.outputs.release_tooling_commit }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: node --import tsx apps/desktop/scripts/release-assets.ts sync --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --artifacts-root release-assets --notes-template .github/release-notes/desktop.md
+        run: node --import tsx apps/desktop/scripts/release-assets.ts sync --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --artifacts-root release-assets --notes-template .github/release-notes/desktop.md --application-source-commit "$APPLICATION_SOURCE_COMMIT" --release-tooling-commit "$RELEASE_TOOLING_COMMIT"
