@@ -13,6 +13,13 @@ interface DesktopPackage {
     readonly asarUnpack: readonly string[]
     readonly electronDist: string
     readonly files: readonly string[]
+    readonly dmg: {
+      readonly contents: readonly {
+        readonly path?: string
+        readonly type: 'file' | 'link'
+      }[]
+      readonly window: { readonly height: number; readonly width: number }
+    }
     readonly extraResources: readonly {
       readonly from: string
       readonly to: string
@@ -196,6 +203,24 @@ describe('desktop packaging configuration', () => {
     // macOS rejects for notifications. Ad-hoc signing is the safe default because
     // the signing identifier then matches CFBundleIdentifier.
     expect(desktopPackage.build.mac.identity).toBe('-')
+  })
+
+  it('places the release-only UTF-8 installation guide beside the app in the DMG', () => {
+    const guidePath = resolve(desktopRoot, 'release-resources/安装指南.txt')
+    const guide = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(guidePath))
+    const contents = desktopPackage.build.dmg.contents
+
+    expect(contents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'file' }),
+      expect.objectContaining({ type: 'link', path: '/Applications' }),
+      expect.objectContaining({ type: 'file', path: 'release-resources/安装指南.txt' }),
+    ]))
+    expect(desktopPackage.build.dmg.window).toEqual({ width: 540, height: 380 })
+    expect(guide).toContain('系统设置 → 隐私与安全性')
+    expect(guide).toContain('bluebirdflew4288-ui/deepseek-desktop')
+    expect(guide).not.toMatch(/spctl\s+--master-disable|xattr\s+-cr/iu)
+    expect(desktopPackage.build.files).not.toContain('release-resources/**')
+    expect(desktopPackage.build.extraResources.some(({ from }) => from === 'release-resources')).toBe(false)
   })
 
   it('keeps a real Developer ID release from inheriting the ad-hoc default', () => {

@@ -1,0 +1,30 @@
+DeepSeek Desktop 安装指南
+
+1. 将「DeepSeek Desktop.app」拖入 Applications（应用程序）文件夹。
+
+2. 当前 GitHub 社区版仅使用 ad-hoc 代码签名：
+   - 未使用 Apple Developer ID
+   - 未经过 Apple notarization（公证）
+
+3. 因此 macOS Gatekeeper 在首次打开时可能显示安全提示。
+
+4. 如果普通双击无法打开：
+   - 请先在 Finder 中找到 DeepSeek Desktop；
+   - 右键 / Control + 点击应用；
+   - 选择「打开」；
+   - 根据 macOS 提示再次确认。
+
+5. 如果系统仍然阻止打开，请前往：
+   系统设置 → 隐私与安全性
+
+   查看 macOS 提供的应用放行选项。具体按钮文字可能随 macOS 版本变化，
+   请以当前系统实际界面为准。
+
+6. 不建议关闭 macOS Gatekeeper。不要执行来源不明的终端命令。
+
+7. 请仅从本项目官方 GitHub Release 下载：
+   bluebirdflew4288-ui/deepseek-desktop
+
+   并核对 GitHub Release 页面提供的 SHA-256。
+
+DeepSeek Desktop 是非官方社区桌面应用。
