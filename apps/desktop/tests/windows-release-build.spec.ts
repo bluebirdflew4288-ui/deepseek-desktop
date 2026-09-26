@@ -1,11 +1,16 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import {
   assertAuthenticodeEvidence,
+  assertUnsignedAuthenticodeEvidence,
   assertWindowsReleaseSigningInputs,
   buildThenVerifyWindowsPackage,
+  unsignedWindowsReleaseBuilderConfig,
+  writeWindowsSigningManifest,
+  windowsReleaseMode,
   windowsReleaseBuilderConfig,
   type AuthenticodeEvidence,
 } from '../scripts/windows-release-build.ts'
@@ -60,6 +65,37 @@ describe('Windows release signing gate', () => {
     })
   })
 
+  it('selects signed mode only when every trusted signing input exists', () => {
+    expect(windowsReleaseMode(READY)).toBe('signed')
+    expect(windowsReleaseMode({})).toBe('unsigned')
+    expect(() => windowsReleaseMode({ WINDOWS_CERTIFICATE_PASSWORD: READY.WINDOWS_CERTIFICATE_PASSWORD }))
+      .toThrow('must be complete or absent')
+  })
+
+  it('configures unsigned Windows packaging without forcing code signing', () => {
+    expect(unsignedWindowsReleaseBuilderConfig()).toEqual({
+      forceCodeSigning: false,
+      artifactName: 'DeepSeek-Desktop-${version}-${os}-${arch}.${ext}',
+    })
+  })
+
+  it('writes an explicit Windows signing manifest for release-note generation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'desktop-windows-signing-manifest-test-'))
+    const output = join(root, 'windows-signing-manifest.json')
+    try {
+      expect(writeWindowsSigningManifest('unsigned', '1.0.5', output)).toEqual({
+        schemaVersion: 1,
+        platform: 'win-x64',
+        version: '1.0.5',
+        mode: 'unsigned',
+        authenticode: 'NotSigned',
+      })
+      expect(JSON.parse(readFileSync(output, 'utf8'))).toMatchObject({ mode: 'unsigned', authenticode: 'NotSigned' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('sets the electron-builder v26 fail-closed and RFC 3161 signtool options', () => {
     expect(windowsReleaseBuilderConfig({
       publisher: READY.WINDOWS_EXPECTED_PUBLISHER,
@@ -104,11 +140,25 @@ describe('Windows release signing gate', () => {
       .toThrow('chain verification failed')
   })
 
+  it('accepts only explicit NotSigned evidence for the unsigned path', () => {
+    expect(() => assertUnsignedAuthenticodeEvidence({
+      status: 'NotSigned',
+      signerSubject: null,
+      timestampSubject: null,
+      timestampEkus: [],
+      trustedChain: false,
+      signtoolSucceeded: false,
+    })).not.toThrow()
+    expect(() => assertUnsignedAuthenticodeEvidence({ ...VALID_EVIDENCE, status: 'Valid' }))
+      .toThrow('must be NotSigned')
+  })
+
   it('extracts the ZIP executable, compares its SHA-256 to the loose executable, and verifies its signature', () => {
     expect(authenticodeScript).toContain('Expand-Archive -LiteralPath $ZipPath')
     expect(authenticodeScript).toContain('Get-FileHash -LiteralPath $Path[-1] -Algorithm SHA256')
     expect(authenticodeScript).toContain('Get-FileHash -LiteralPath $zipExecutable -Algorithm SHA256')
     expect(authenticodeScript).toContain('$Path += $zipExecutable')
     expect(authenticodeScript).toContain('Remove-Item -LiteralPath $tempRoot -Recurse -Force')
+    expect(authenticodeScript).toContain('[ValidateSet(\'Valid\', \'NotSigned\')]')
   })
 })

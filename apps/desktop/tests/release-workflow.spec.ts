@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/desktop-release.yml'), 'utf8')
+const notes = readFileSync(resolve(repositoryRoot, '.github/release-notes/desktop.md'), 'utf8')
 
 describe('desktop release workflow guardrails', () => {
   it('checks the exact tag and main ancestry before native builds', () => {
@@ -15,7 +16,7 @@ describe('desktop release workflow guardrails', () => {
   })
 
   it('maps Windows certificate secrets to only the signing build step', () => {
-    const signingStart = workflow.indexOf('- name: Build and verify signed Windows x64 distributables')
+    const signingStart = workflow.indexOf('- name: Build and verify Windows x64 distributables (signed or unsigned)')
     const signingEnd = workflow.indexOf('- name: Write Windows x64 artifact manifest', signingStart)
     expect(signingStart).toBeGreaterThanOrEqual(0)
     expect(signingEnd).toBeGreaterThan(signingStart)
@@ -25,9 +26,16 @@ describe('desktop release workflow guardrails', () => {
     expect(workflow.match(/secrets\.WINDOWS_CERTIFICATE_PFX_BASE64/gu)).toHaveLength(1)
     expect(workflow.match(/secrets\.WINDOWS_CERTIFICATE_PASSWORD/gu)).toHaveLength(1)
     expect(signingStep).toContain('scripts/windows-release-build.ts')
+    expect(workflow).toContain('apps/desktop/windows-signing-manifest.json')
   })
 
-  it('publishes only after signed Windows and explicit four-asset manifest verification', () => {
+  it('keeps release notes status-driven instead of hard-coding a Windows signature claim', () => {
+    expect(notes).toContain('{{WINDOWS_SIGNING_DETAILS}}')
+    expect(notes).toContain('{{WINDOWS_SIGNING_DETAILS_ZH}}')
+    expect(notes).not.toContain('Windows x64: Authenticode-signed')
+  })
+
+  it('publishes only after verified Windows and explicit four-asset manifest verification', () => {
     expect(workflow).toContain('needs: [verify-release-tag, build]')
     expect(workflow).toContain('desktop-macos-arm64')
     expect(workflow).toContain('desktop-windows-x64')

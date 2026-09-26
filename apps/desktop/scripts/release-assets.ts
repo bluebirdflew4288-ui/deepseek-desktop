@@ -32,6 +32,16 @@ export interface AssetSyncPlan {
   readonly unchanged: readonly ReleaseAsset[]
 }
 
+export type WindowsReleaseMode = 'signed' | 'unsigned'
+
+export interface WindowsSigningManifest {
+  readonly schemaVersion: 1
+  readonly platform: 'win-x64'
+  readonly version: string
+  readonly mode: WindowsReleaseMode
+  readonly authenticode: 'Valid' | 'NotSigned'
+}
+
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
 
 export function expectedDesktopAssetNames(platform: DesktopReleasePlatform, version: string): readonly string[] {
@@ -73,6 +83,33 @@ export function planAssetSync(
 
 export function hashFile(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+export function windowsSigningReleaseNotes(mode: WindowsReleaseMode): { readonly en: string; readonly zh: string } {
+  if (mode === 'signed') {
+    return {
+      en: 'Authenticode-signed installer and application executable; the trusted certificate chain, exact publisher Subject, and RFC 3161 timestamp were verified before release.',
+      zh: '安装程序与应用可执行文件均通过 Authenticode 签名；发布前已验证可信证书链、完整 Publisher Subject 精确匹配和 RFC 3161 时间戳。',
+    }
+  }
+  return {
+    en: 'Unsigned / NotSigned. The Windows x64 installer and application executable are not Authenticode-signed. Windows Defender SmartScreen may display an "Unknown publisher" or "Windows protected your PC" warning. This is a publisher/reputation warning, not a malware detection, and Windows Defender will not necessarily block the application. Download only from this repository\'s official GitHub Release and verify the SHA-256 hashes below.',
+    zh: 'Unsigned / NotSigned。Windows x64 安装程序与应用可执行文件当前未使用 Authenticode 代码签名。Windows Defender SmartScreen 可能提示“未知发布者”或“Windows 已保护你的电脑”。这是发布者/信誉警告，不表示 malware detection，也不意味着 Windows Defender 一定会拦截。请仅从本仓库官方 GitHub Release 下载，并使用下方 SHA-256 校验值。',
+  }
+}
+
+function readWindowsSigningManifest(root: string, version: string): WindowsSigningManifest {
+  const path = join(root, 'win', 'windows-signing-manifest.json')
+  if (!existsSync(path) || !statSync(path).isFile()) throw new Error('Windows signing manifest is missing')
+  const manifest = JSON.parse(readFileSync(path, 'utf8')) as Partial<WindowsSigningManifest>
+  if (manifest.schemaVersion !== 1 || manifest.platform !== 'win-x64' || manifest.version !== version
+    || (manifest.mode !== 'signed' && manifest.mode !== 'unsigned')
+    || (manifest.authenticode !== 'Valid' && manifest.authenticode !== 'NotSigned')
+    || (manifest.mode === 'signed' && manifest.authenticode !== 'Valid')
+    || (manifest.mode === 'unsigned' && manifest.authenticode !== 'NotSigned')) {
+    throw new Error('Invalid Windows signing manifest')
+  }
+  return manifest as WindowsSigningManifest
 }
 
 export function writePlatformManifest(
@@ -179,6 +216,7 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
   const notesTemplate = resolve(required(args, 'notes-template'))
   const expected = readExpectedAssets(root, tag)
   const version = tag.slice(1)
+  const windowsSigningManifest = readWindowsSigningManifest(root, version)
   const commit = process.env.GITHUB_SHA
   if (commit === undefined || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(commit)) {
     throw new Error('GitHub Actions source commit identity is unavailable')
@@ -188,6 +226,8 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
     .replaceAll('{{VERSION}}', version)
     .replaceAll('{{COMMIT}}', commit)
     .replaceAll('{{ASSET_HASHES}}', hashes)
+    .replaceAll('{{WINDOWS_SIGNING_DETAILS}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).en)
+    .replaceAll('{{WINDOWS_SIGNING_DETAILS_ZH}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).zh)
 
   let release = releaseJson(repo, tag)
   if (release === undefined) {
