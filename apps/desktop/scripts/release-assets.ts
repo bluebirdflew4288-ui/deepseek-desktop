@@ -166,6 +166,16 @@ export function findReleaseByTag(
   return releases.find(release => release.tag_name === tag)
 }
 
+export function canReuseDraftRelease(
+  release: Record<string, unknown>,
+  expectedSigningDetails: string,
+): boolean {
+  return release.draft === true
+    && typeof release.body === 'string'
+    && /Source commit: `(?:[0-9a-f]{40}|[0-9a-f]{64})`/iu.test(release.body)
+    && release.body.includes(expectedSigningDetails)
+}
+
 function releaseJson(repo: string, tag: string): Record<string, unknown> | undefined {
   const result = spawnSync('gh', ['api', `repos/${repo}/releases/tags/${tag}`], { encoding: 'utf8', windowsHide: true })
   if (result.status !== 0) {
@@ -243,6 +253,7 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
     .replaceAll('{{WINDOWS_SIGNING_DETAILS}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).en)
     .replaceAll('{{WINDOWS_SIGNING_DETAILS_ZH}}', windowsSigningReleaseNotes(windowsSigningManifest.mode).zh)
 
+  const expectedSigningDetails = windowsSigningReleaseNotes(windowsSigningManifest.mode).en
   let release = releaseJson(repo, tag)
   if (release === undefined) {
     runGh(['release', 'create', tag, '--repo', repo, '--draft', '--title', `DeepSeek Desktop ${tag}`, '--notes', notes])
@@ -253,7 +264,8 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
   if (typeof id !== 'number' || typeof release.draft !== 'boolean') throw new Error('GitHub Release response is incomplete')
   const isDraft = release.draft
   if (typeof release.body !== 'string'
-    || !release.body.includes(`Source commit: \`${commit}\``)) {
+    || (!release.body.includes(`Source commit: \`${commit}\``)
+      && !canReuseDraftRelease(release, expectedSigningDetails))) {
     throw new Error('Existing Release source commit provenance differs from this tag run')
   }
   const currentAssets = releaseAssets(repo, id)
@@ -284,7 +296,7 @@ async function syncRelease(args: ReadonlyMap<string, string>): Promise<void> {
       if (actual !== asset.sha256) throw new Error(`Release asset SHA-256 verification failed: ${asset.name}`)
     }
     if (isDraft) {
-      runGh(['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-F', 'draft=false'])
+      runGh(['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `body=${notes}`, '-F', 'draft=false'])
       release = releaseJson(repo, tag)
       if (release?.draft !== false) throw new Error('GitHub Release did not leave draft state after verification')
     }
