@@ -159,10 +159,24 @@ function runGh(args: readonly string[]): string {
   return result.stdout
 }
 
+export function findReleaseByTag(
+  releases: readonly Record<string, unknown>[],
+  tag: string,
+): Record<string, unknown> | undefined {
+  return releases.find(release => release.tag_name === tag)
+}
+
 function releaseJson(repo: string, tag: string): Record<string, unknown> | undefined {
   const result = spawnSync('gh', ['api', `repos/${repo}/releases/tags/${tag}`], { encoding: 'utf8', windowsHide: true })
   if (result.status !== 0) {
-    if (`${result.stderr ?? ''} ${result.stdout ?? ''}`.includes('404')) return undefined
+    if (`${result.stderr ?? ''} ${result.stdout ?? ''}`.includes('404')) {
+      // GitHub's tag lookup does not return draft Releases. Search the full
+      // authenticated Release list so a failed retry reuses the existing
+      // immutable draft instead of attempting a duplicate create.
+      const list = spawnSync('gh', ['api', `repos/${repo}/releases?per_page=100`], { encoding: 'utf8', windowsHide: true })
+      if (list.status !== 0) throw new Error(`Could not inspect GitHub Release list (exit ${String(list.status)})`)
+      return findReleaseByTag(JSON.parse(list.stdout) as Record<string, unknown>[], tag)
+    }
     throw new Error(`Could not inspect GitHub Release (exit ${String(result.status)})`)
   }
   return JSON.parse(result.stdout) as Record<string, unknown>
