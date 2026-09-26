@@ -7,10 +7,13 @@ import {
   canReusePublishedV105Release,
   expectedDesktopAssetNames,
   findReleaseByTag,
+  hashFile,
   planAssetSync,
   renderDesktopReleaseNotes,
+  syncDesktopRelease,
   windowsSigningReleaseNotes,
   writePlatformManifest,
+  type ReleaseSyncApi,
   type ReleaseAsset,
 } from '../scripts/release-assets.ts'
 
@@ -95,6 +98,112 @@ describe('desktop release asset manifests', () => {
     const draft = { id: 397152774, tag_name: 'v1.0.5', draft: true }
     expect(findReleaseByTag([{ tag_name: 'v1.0.4', draft: false }, draft], 'v1.0.5')).toBe(draft)
     expect(findReleaseByTag([], 'v1.0.5')).toBeUndefined()
+  })
+
+  it('uses the create response while a new draft is still invisible to release lookups', async () => {
+    const root = tempRoot()
+    const artifactsRoot = join(root, 'artifacts')
+    const uploadedPaths = new Map<string, string>()
+    const remoteAssets: { name: string }[] = []
+    const events: string[] = []
+    const notesTemplatePath = join(root, 'desktop-notes.md')
+    const tag = 'v1.0.6'
+    const sourceCommit = '77d310dbdd82cf20110ccbbc790e77ed4d5f6d01'
+    const toolingCommit = 'b'.repeat(40)
+
+    for (const [platform, directory] of [['mac-arm64', 'mac'], ['win-x64', 'win']] as const) {
+      const platformRoot = join(artifactsRoot, directory)
+      const dist = join(platformRoot, 'dist')
+      mkdirSync(dist, { recursive: true })
+      const names = expectedDesktopAssetNames(platform, '1.0.6')
+      for (const name of names) {
+        const path = join(dist, name)
+        writeFileSync(path, `artifact:${name}`)
+        uploadedPaths.set(name, path)
+      }
+      writeFileSync(join(platformRoot, 'release-manifest.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        platform,
+        version: '1.0.6',
+        assets: names,
+      })}\n`)
+    }
+    writeFileSync(join(artifactsRoot, 'win', 'windows-signing-manifest.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      platform: 'win-x64',
+      version: '1.0.6',
+      mode: 'unsigned',
+      authenticode: 'NotSigned',
+    })}\n`)
+    writeFileSync(notesTemplatePath, [
+      '# DeepSeek Desktop {{VERSION}}',
+      'Application source commit: `{{APPLICATION_SOURCE_COMMIT}}`',
+      'Release tooling commit: `{{RELEASE_TOOLING_COMMIT}}`',
+      '{{ASSET_HASHES}}',
+      '{{WINDOWS_SIGNING_DETAILS}}',
+      '{{WINDOWS_SIGNING_DETAILS_ZH}}',
+    ].join('\n'))
+
+    const release: Record<string, unknown> = {
+      id: 1234,
+      tag_name: tag,
+      draft: true,
+      prerelease: false,
+      body: '',
+    }
+    const api: ReleaseSyncApi = {
+      findRelease: () => {
+        events.push('lookup')
+        // Model eventual consistency: the newly created draft remains
+        // invisible until the publish operation completes.
+        return release.draft === true ? undefined : release
+      },
+      createDraft: (_repo, requestedTag, title, body) => {
+        events.push('create')
+        expect(requestedTag).toBe(tag)
+        expect(title).toBe('DeepSeek Desktop v1.0.6')
+        Object.assign(release, { tag_name: requestedTag, name: title, body })
+        return release
+      },
+      listAssets: () => {
+        events.push('list-assets')
+        return [...remoteAssets]
+      },
+      downloadHash: (_repo, _requestedTag, name) => {
+        const path = uploadedPaths.get(name)
+        if (path === undefined) throw new Error(`No test artifact uploaded for ${name}`)
+        return hashFile(path)
+      },
+      upload: (_repo, _requestedTag, path) => {
+        events.push(`upload:${path.split('/').at(-1)}`)
+        remoteAssets.push({ name: path.split('/').at(-1)! })
+      },
+      publish: (_repo, releaseId, body) => {
+        events.push('publish')
+        expect(releaseId).toBe(1234)
+        release.body = body
+        release.draft = false
+      },
+    }
+
+    await syncDesktopRelease(new Map([
+      ['tag', tag],
+      ['repo', 'bluebirdflew4288-ui/deepseek-desktop'],
+      ['artifacts-root', artifactsRoot],
+      ['notes-template', notesTemplatePath],
+      ['application-source-commit', sourceCommit],
+      ['release-tooling-commit', toolingCommit],
+    ]), api)
+
+    expect(events[0]).toBe('lookup')
+    expect(events[1]).toBe('create')
+    expect(events.filter(event => event === 'lookup')).toHaveLength(2)
+    expect(events.filter(event => event.startsWith('upload:'))).toHaveLength(4)
+    expect(events.at(-2)).toBe('publish')
+    expect(events.at(-1)).toBe('lookup')
+    expect(release).toMatchObject({ tag_name: tag, draft: false, prerelease: false })
+    expect(release.body).toContain(`Release tooling commit: \`${toolingCommit}\``)
+    expect(remoteAssets).toHaveLength(4)
   })
 
   it('only reuses drafts with release provenance and matching signing disclosure', () => {

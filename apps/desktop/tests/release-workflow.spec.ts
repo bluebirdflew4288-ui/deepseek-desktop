@@ -8,11 +8,13 @@ const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/desktop
 const notes = readFileSync(resolve(repositoryRoot, '.github/release-notes/desktop.md'), 'utf8')
 
 describe('desktop release workflow guardrails', () => {
-  it('supports controlled recovery dispatch from the immutable v1.0.5 tag', () => {
+  it('supports controlled recovery dispatch only from immutable allowlisted release tags', () => {
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('release_tag:')
     expect(workflow).toContain('git rev-parse "$RELEASE_TAG^{commit}"')
-    expect(workflow).toContain('8cdad7930310893150976929758b29975877fb28')
+    expect(workflow).toContain('v1.0.5:8cdad7930310893150976929758b29975877fb28')
+    expect(workflow).toContain('v1.0.6:77d310dbdd82cf20110ccbbc790e77ed4d5f6d01')
+    expect(workflow).toContain('explicitly allowlisted immutable release tags and commits')
     expect(workflow).toContain('ref: ${{ needs.verify-release-tag.outputs.release_tag }}')
     expect(workflow).toContain('release_tooling_commit: ${{ steps.resolve-release-tag.outputs.release_tooling_commit }}')
     expect(workflow).toContain('RELEASE_TOOLING_COMMIT="$(git rev-parse origin/main^{commit})"')
