@@ -8,6 +8,7 @@ import {
   assertUnsignedAuthenticodeEvidence,
   assertWindowsReleaseSigningInputs,
   buildThenVerifyWindowsPackage,
+  runWindowsReleaseCli,
   unsignedWindowsReleaseBuilderConfig,
   writeWindowsSigningManifest,
   windowsReleaseMode,
@@ -76,7 +77,13 @@ describe('Windows release signing gate', () => {
     expect(unsignedWindowsReleaseBuilderConfig()).toEqual({
       forceCodeSigning: false,
       artifactName: 'DeepSeek-Desktop-${version}-${os}-${arch}.${ext}',
+      win: { signExecutable: false },
     })
+  })
+
+  it('returns a non-zero CLI result when the release build fails', async () => {
+    const error = new Error('verification failed')
+    await expect(runWindowsReleaseCli({}, async () => { throw error })).resolves.toBe(1)
   })
 
   it('writes an explicit Windows signing manifest for release-note generation', () => {

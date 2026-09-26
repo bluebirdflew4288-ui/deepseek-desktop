@@ -8,10 +8,19 @@ const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/desktop
 const notes = readFileSync(resolve(repositoryRoot, '.github/release-notes/desktop.md'), 'utf8')
 
 describe('desktop release workflow guardrails', () => {
+  it('supports controlled recovery dispatch from the immutable v1.0.5 tag', () => {
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).toContain('release_tag:')
+    expect(workflow).toContain('git rev-parse "$RELEASE_TAG^{commit}"')
+    expect(workflow).toContain('8cdad7930310893150976929758b29975877fb28')
+    expect(workflow).toContain('ref: ${{ needs.verify-release-tag.outputs.release_tag }}')
+  })
+
   it('checks the exact tag and main ancestry before native builds', () => {
     expect(workflow).toContain('verify-release-tag:')
     expect(workflow).toContain('git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main')
-    expect(workflow).toContain("process.env.RELEASE_TAG !== 'v'+version")
+    expect(workflow).toContain('git show "$RELEASE_TAG:apps/desktop/package.json"')
+    expect(workflow).toContain('"$RELEASE_TAG" != "v$TAG_VERSION"')
     expect(workflow).toContain('needs: verify-release-tag')
   })
 
@@ -27,6 +36,8 @@ describe('desktop release workflow guardrails', () => {
     expect(workflow.match(/secrets\.WINDOWS_CERTIFICATE_PASSWORD/gu)).toHaveLength(1)
     expect(signingStep).toContain('scripts/windows-release-build.ts')
     expect(workflow).toContain('apps/desktop/windows-signing-manifest.json')
+    expect(workflow).toContain('Verify Windows signing manifest before upload')
+    expect(workflow).toContain('Unsigned Windows signing manifest is not NotSigned')
   })
 
   it('keeps release notes status-driven instead of hard-coding a Windows signature claim', () => {

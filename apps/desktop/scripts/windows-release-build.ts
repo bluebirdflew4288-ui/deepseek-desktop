@@ -88,6 +88,9 @@ export function unsignedWindowsReleaseBuilderConfig() {
   return {
     forceCodeSigning: false,
     artifactName: 'DeepSeek-Desktop-${version}-${os}-${arch}.${ext}',
+    win: {
+      signExecutable: false,
+    },
   }
 }
 
@@ -298,10 +301,22 @@ export async function buildWindowsRelease(env: NodeJS.ProcessEnv): Promise<void>
   else await buildUnsignedWindowsRelease()
 }
 
+export async function runWindowsReleaseCli(
+  env: NodeJS.ProcessEnv,
+  runner: (env: NodeJS.ProcessEnv) => Promise<void> = buildWindowsRelease,
+): Promise<number> {
+  try {
+    await runner(env)
+    return 0
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : 'Windows release build failed')
+    return 1
+  }
+}
+
 const invokedPath = process.argv[1]
 if (invokedPath !== undefined && resolve(invokedPath) === fileURLToPath(import.meta.url)) {
-  void buildWindowsRelease(process.env).catch((error) => {
-    console.error(error instanceof Error ? error.message : 'Windows release build failed')
-    process.exitCode = 1
+  void runWindowsReleaseCli(process.env).then((exitCode) => {
+    if (exitCode !== 0) process.exit(exitCode)
   })
 }
