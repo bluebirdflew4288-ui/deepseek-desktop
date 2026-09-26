@@ -33,6 +33,7 @@ const VALID_EVIDENCE: AuthenticodeEvidence = {
   signtoolSucceeded: true,
 }
 const authenticodeScript = readFileSync(resolve(fileURLToPath(new URL('../scripts/verify-windows-authenticode.ps1', import.meta.url))), 'utf8')
+const windowsReleaseBuildScript = readFileSync(resolve(fileURLToPath(new URL('../scripts/windows-release-build.ts', import.meta.url))), 'utf8')
 
 describe('Windows release signing gate', () => {
   it('verifies the packaged runtime only after the builder succeeds', async () => {
@@ -167,5 +168,13 @@ describe('Windows release signing gate', () => {
     expect(authenticodeScript).toContain('$Path += $zipExecutable')
     expect(authenticodeScript).toContain('Remove-Item -LiteralPath $tempRoot -Recurse -Force')
     expect(authenticodeScript).toContain('[ValidateSet(\'Valid\', \'NotSigned\')]')
+  })
+
+  it('passes Windows executable paths as JSON to PowerShell so spaces remain intact', () => {
+    expect(windowsReleaseBuildScript).toContain("spawnSync('pwsh.exe'")
+    expect(windowsReleaseBuildScript).toContain("'-PathJson', JSON.stringify(paths.map")
+    expect(windowsReleaseBuildScript).not.toContain("'-Path', ...paths")
+    expect(authenticodeScript).toContain('[string] $PathJson')
+    expect(authenticodeScript).toContain('$Path = @($PathJson | ConvertFrom-Json)')
   })
 })
