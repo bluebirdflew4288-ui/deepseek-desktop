@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing immutable release tag to recover'
+        required: true
+        default: v1.0.5
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +26,9 @@ jobs:
   verify-release-tag:
     name: Verify release tag
     runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.resolve-release-tag.outputs.release_tag }}
+      release_commit: ${{ steps.resolve-release-tag.outputs.release_commit }}
     steps:
       - name: Check out complete history
         uses: actions/checkout@v6
@@ -31,13 +41,28 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Require the exact version on main history
+      - name: Resolve and verify the immutable release tag
+        id: resolve-release-tag
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          node -e "const fs=require('node:fs'); const version=JSON.parse(fs.readFileSync('apps/desktop/package.json','utf8')).version; if (process.env.RELEASE_TAG !== 'v'+version) throw new Error('release tag must exactly match desktop version '+version);"
+          git fetch origin --tags --no-recurse-submodules
+          test -n "$RELEASE_TAG"
+          RELEASE_COMMIT="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          TAG_VERSION="$(git show "$RELEASE_TAG:apps/desktop/package.json" | node -e "const fs=require('node:fs'); process.stdout.write(JSON.parse(fs.readFileSync(0,'utf8')).version)")"
+          if [[ "$RELEASE_TAG" != "v$TAG_VERSION" ]]; then
+            echo "release tag must exactly match desktop version $TAG_VERSION"
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && ( "$RELEASE_TAG" != "v1.0.5" || "$RELEASE_COMMIT" != "8cdad7930310893150976929758b29975877fb28" ) ]]; then
+            echo 'workflow_dispatch recovery is restricted to v1.0.5 at its immutable public-main commit.'
+            exit 1
+          fi
           git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || { echo 'Release tag commit is not in origin/main history.'; exit 1; }
+          {
+            echo "release_tag=$RELEASE_TAG"
+            echo "release_commit=$RELEASE_COMMIT"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }}
@@ -74,8 +99,15 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.verify-release-tag.outputs.release_tag }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Overlay recovery release tooling from public main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git fetch origin main --depth=1
+          git checkout origin/main -- apps/desktop/scripts/windows-release-build.ts apps/desktop/scripts/verify-windows-authenticode.ps1
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -115,7 +147,7 @@ jobs:
         if: matrix.platform == 'mac'
         working-directory: apps/desktop
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify-release-tag.outputs.release_tag }}
         run: node --import tsx scripts/release-assets.ts write-platform-manifest --platform mac-arm64 --tag "$RELEASE_TAG" --dist dist --output release-manifest.json
 
       - name: Build and verify Windows x64 distributables (signed or unsigned)
@@ -128,11 +160,23 @@ jobs:
           WINDOWS_RFC3161_TIMESTAMP_SERVER: ${{ vars.WINDOWS_RFC3161_TIMESTAMP_SERVER }}
         run: node --import tsx scripts/windows-release-build.ts
 
+      - name: Verify Windows signing manifest before upload
+        if: matrix.platform == 'win'
+        working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath windows-signing-manifest.json -Raw | ConvertFrom-Json
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($manifest.schemaVersion -ne 1 -or $manifest.platform -ne 'win-x64' -or $manifest.version -ne $version) { throw 'Windows signing manifest identity is invalid' }
+          if ($manifest.mode -eq 'unsigned' -and $manifest.authenticode -ne 'NotSigned') { throw 'Unsigned Windows signing manifest is not NotSigned' }
+          if ($manifest.mode -eq 'signed' -and $manifest.authenticode -ne 'Valid') { throw 'Signed Windows signing manifest is not Valid' }
+          if ($manifest.mode -notin @('signed', 'unsigned')) { throw 'Windows signing manifest mode is invalid' }
+
       - name: Write Windows x64 artifact manifest
         if: matrix.platform == 'win'
         working-directory: apps/desktop
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify-release-tag.outputs.release_tag }}
         run: node --import tsx scripts/release-assets.ts write-platform-manifest --platform win-x64 --tag "$env:RELEASE_TAG" --dist dist --output release-manifest.json
 
       - name: Upload verified platform artifacts
@@ -153,8 +197,14 @@ jobs:
       - name: Check out release notes and manifest verifier
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.verify-release-tag.outputs.release_tag }}
           persist-credentials: false
+
+      - name: Overlay recovery release tooling from public main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git fetch origin main --depth=1
+          git checkout origin/main -- apps/desktop/scripts/release-assets.ts .github/release-notes/desktop.md
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -185,6 +235,6 @@ jobs:
       - name: Create draft, reconcile immutable assets, and publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify-release-tag.outputs.release_tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: node --import tsx apps/desktop/scripts/release-assets.ts sync --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --artifacts-root release-assets --notes-template .github/release-notes/desktop.md
