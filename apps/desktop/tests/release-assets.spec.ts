@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  canReuseDraftRelease,
   expectedDesktopAssetNames,
   findReleaseByTag,
   planAssetSync,
@@ -92,5 +93,16 @@ describe('desktop release asset manifests', () => {
     const draft = { id: 397152774, tag_name: 'v1.0.5', draft: true }
     expect(findReleaseByTag([{ tag_name: 'v1.0.4', draft: false }, draft], 'v1.0.5')).toBe(draft)
     expect(findReleaseByTag([], 'v1.0.5')).toBeUndefined()
+  })
+
+  it('only reuses drafts with release provenance and matching signing disclosure', () => {
+    const draft = {
+      tag_name: 'v1.0.5',
+      draft: true,
+      body: 'Source commit: `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`\nUnsigned / NotSigned.',
+    }
+    expect(canReuseDraftRelease(draft, 'Unsigned / NotSigned.')).toBe(true)
+    expect(canReuseDraftRelease({ ...draft, draft: false }, 'Unsigned / NotSigned.')).toBe(false)
+    expect(canReuseDraftRelease(draft, 'Authenticode-signed')).toBe(false)
   })
 })
