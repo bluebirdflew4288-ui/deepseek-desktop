@@ -129,16 +129,17 @@ function inspectAuthenticode(
   expectedStatus: 'Valid' | 'NotSigned',
 ): AuthenticodeEvidence[] {
   const script = resolve('scripts/verify-windows-authenticode.ps1')
-  const result = spawnSync('powershell.exe', [
+  const result = spawnSync('pwsh.exe', [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
-    '-Path', ...paths, '-ZipPath', zipPath, '-ZipExecutableName', zipExecutableName,
+    '-PathJson', JSON.stringify(paths.map(path => path.replaceAll('\\', '/'))), '-ZipPath', zipPath, '-ZipExecutableName', zipExecutableName,
     '-ExpectedStatus', expectedStatus,
   ], {
     encoding: 'utf8',
     windowsHide: true,
   })
   if (result.error !== undefined || result.status !== 0) {
-    throw new Error(`Post-build Windows Authenticode status verification failed: expected ${expectedStatus}`)
+    const detail = `${result.stderr ?? ''}\n${result.stdout ?? ''}`.trim()
+    throw new Error(`Post-build Windows Authenticode status verification failed: expected ${expectedStatus}${detail === '' ? '' : `: ${detail}`}`)
   }
   let evidence: AuthenticodeEvidence[]
   try { evidence = JSON.parse(result.stdout) as AuthenticodeEvidence[] } catch {

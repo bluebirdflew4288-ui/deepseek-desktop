@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string[]] $Path,
+  [string] $PathJson,
   [Parameter(Mandatory = $true)]
   [string] $ZipPath,
   [Parameter(Mandatory = $true)]
@@ -32,6 +32,7 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('desktop-release-zip-' 
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {
+  $Path = @($PathJson | ConvertFrom-Json)
   if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
     throw 'Windows release ZIP is missing.'
   }
