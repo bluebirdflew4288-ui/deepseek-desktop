@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   expectedDesktopAssetNames,
+  findReleaseByTag,
   planAssetSync,
   windowsSigningReleaseNotes,
   writePlatformManifest,
@@ -85,5 +86,11 @@ describe('desktop release asset manifests', () => {
       en: 'Authenticode-signed installer and application executable; the trusted certificate chain, exact publisher Subject, and RFC 3161 timestamp were verified before release.',
       zh: '安装程序与应用可执行文件均通过 Authenticode 签名；发布前已验证可信证书链、完整 Publisher Subject 精确匹配和 RFC 3161 时间戳。',
     })
+  })
+
+  it('finds an existing draft Release when tag lookup excludes drafts', () => {
+    const draft = { id: 397152774, tag_name: 'v1.0.5', draft: true }
+    expect(findReleaseByTag([{ tag_name: 'v1.0.4', draft: false }, draft], 'v1.0.5')).toBe(draft)
+    expect(findReleaseByTag([], 'v1.0.5')).toBeUndefined()
   })
 })
