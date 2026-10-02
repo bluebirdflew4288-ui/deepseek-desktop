@@ -25,6 +25,7 @@ import {
 import {
   createManagedHarnessRuntime,
   type ManagedHarnessRuntime,
+  type ManagedHarnessRuntimeOptions,
   type ManagedHarnessTransactionProgress,
 } from '../src/managed-harness.ts'
 import {
@@ -127,6 +128,7 @@ async function fixtures(
   runtimeRoot = root,
   rootBoundary?: string,
   rootAnchor?: string,
+  hostOptions: Pick<ManagedHarnessRuntimeOptions, 'hostEnvironment' | 'createSupervisor'> = {},
 ): Promise<HarnessFixtures> {
   let releaseHeldInstall: (() => void) | undefined
   let releaseHeldLookup: (() => void) | undefined
@@ -154,6 +156,7 @@ async function fixtures(
     releaseSignals: [],
   }
   state.runtime = createManagedHarnessRuntime({
+    ...hostOptions,
     platform: 'darwin',
     root: runtimeRoot,
     ...(rootBoundary === undefined ? {} : { rootBoundary }),
@@ -644,6 +647,37 @@ describe('managed Harness diagnostics', () => {
 })
 
 describe('managed Harness transactions', () => {
+  it('uses daily development paths only for launch, never during install/update/rollback health checks', async () => {
+    const daily = vi.fn(() => ({ PATH: '/desktop/bin:/user/tools', JAVA_HOME: '/jdk', DSH_DESKTOP_API_TOKEN: 'untrusted' }))
+    const state = await fixtures(['0.1.5-rc.1'], undefined, root, undefined, undefined, {
+      hostEnvironment: daily,
+      createSupervisor: (options) => {
+        options.spawnHost()
+        return {
+          start: async () => ({ origin: 'http://127.0.0.1:1' }),
+          shutdown: async () => undefined, onUnexpectedExit: () => () => undefined,
+        }
+      },
+    })
+    await state.runtime.recover()
+    await expect(state.runtime.install()).resolves.toMatchObject({ outcome: 'promoted', version: '0.1.5-rc.1' })
+    state.releases.push('0.1.5-rc.2')
+    await expect(state.runtime.update()).resolves.toMatchObject({ outcome: 'promoted', version: '0.1.5-rc.2' })
+    await expect(state.runtime.rollback()).resolves.toMatchObject({ outcome: 'rolled-back' })
+    expect(daily).not.toHaveBeenCalled()
+    vi.mocked(spawn).mockReturnValue({ pid: 4242, stdout: {}, stderr: {} } as never)
+    const host = state.runtime.createHostSupervisorForLaunch('owned-token')
+    await host.start()
+    await host.shutdown()
+    expect(daily).toHaveBeenCalledOnce()
+    const env = vi.mocked(spawn).mock.lastCall?.[2]?.env
+    expect(env?.PATH).toBe('/desktop/bin:/user/tools')
+    expect(env?.JAVA_HOME).toBe('/jdk')
+    expect(env?.DSH_DESKTOP_API_TOKEN).toBe('owned-token')
+    expect(env?.ELECTRON_RUN_AS_NODE).toBe('1')
+    expect(env?.NODE_OPTIONS).toMatch(/^--import=data:text\/javascript,/u)
+  })
+
   it('installs the first version and makes it launchable', async () => {
     const context = await fixtures(['0.1.5-rc.1'])
     await context.runtime.recover()

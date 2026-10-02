@@ -34,6 +34,10 @@ import {
 } from './desktop-application.ts'
 import { createHarnessUpdateView, type HarnessUpdateView } from './harness-update-view.ts'
 import { createHostSupervisor, spawnDshWeb } from './host-supervisor.ts'
+import { harnessHostEnvironment, prepareHarnessHost } from './harness-host-environment.ts'
+import { discoverDevelopmentEnvironment } from './login-shell-discovery.ts'
+import { assertDevelopmentToolLaunchers, developmentLauncherOptions } from './development-tool-launchers.ts'
+import { parentBoundEnvironment } from './managed-harness-process.ts'
 import { desktopStoragePaths, preserveDesktopPreferences } from './desktop-storage.ts'
 import { createHarnessHealthCheck } from './managed-harness-health.ts'
 import { createNpmHarnessInstaller } from './managed-harness-installer.ts'
@@ -101,7 +105,7 @@ interface HarnessLaunch {
  * @returns the runtime, or undefined outside a packaged app, where the Harness
  * comes from the checkout instead.
  */
-function createManagedHarness(): ManagedHarnessRuntime | undefined {
+function createManagedHarness(hostEnvironment: () => NodeJS.ProcessEnv): ManagedHarnessRuntime | undefined {
   if (!app.isPackaged) return undefined
   const storage = managedStorage()
   const root = storage.managedRoot
@@ -116,6 +120,7 @@ function createManagedHarness(): ManagedHarnessRuntime | undefined {
     nodeExecutable,
     cwd,
     electronRunAsNode: true,
+    hostEnvironment,
     releaseSource: createHarnessReleaseSource(),
     installer: createNpmHarnessInstaller({
       layout,
@@ -645,7 +650,26 @@ async function boot(): Promise<void> {
     },
   })
   await memoryRuntime.start()
-  managedHarness = createManagedHarness()
+  const inherited = { ...process.env }
+  const launcherDirectory = app.isPackaged ? join(process.resourcesPath, 'development-bin') : ''
+  const discoveryAbort = new AbortController()
+  app.on('before-quit', () => { discoveryAbort.abort() })
+  let hostEnvironment = harnessHostEnvironment(inherited, {}, launcherDirectory,
+    { ...(inherited.DSH_HOME === undefined ? {} : { DSH_HOME: inherited.DSH_HOME }) })
+  // Preparation gates only Host startup; Chat and maintenance never receive its environment.
+  const hostEnvironmentReady = Promise.all([
+    app.isPackaged
+      ? assertDevelopmentToolLaunchers(developmentLauncherOptions(launcherDirectory, process.execPath, join(process.resourcesPath, 'npm')))
+      : Promise.resolve(),
+    discoverDevelopmentEnvironment(inherited, { signal: discoveryAbort.signal }),
+  ]).then(([, discovery]) => {
+    for (const failure of discovery.failures) console.warn(`Harness environment discovery: ${failure.reason}`)
+    hostEnvironment = harnessHostEnvironment(inherited, discovery.environment, launcherDirectory,
+      { ...(inherited.DSH_HOME === undefined ? {} : { DSH_HOME: inherited.DSH_HOME }) })
+  })
+  // Keep preparation failures observable at Host.start without an unhandled startup rejection.
+  void hostEnvironmentReady.catch(() => undefined)
+  managedHarness = createManagedHarness(() => hostEnvironment)
   // Recovery runs before any surface exists: an interrupted transaction must be
   // settled, and a Harness a crashed launch still owns must be stopped, before
   // this launch decides what to start.
@@ -666,16 +690,18 @@ async function boot(): Promise<void> {
     createAuthWindow: options => new BrowserWindow(options),
     createHost: () => {
       const managed = managedHarness
-      if (managed?.launch() !== undefined) return managed.createHostSupervisorForLaunch(hostApiToken)
+      if (managed?.launch() !== undefined) {
+        return prepareHarnessHost(managed.createHostSupervisorForLaunch(hostApiToken), hostEnvironmentReady)
+      }
       const launch = harnessLaunch()
       if (launch === undefined) throw new Error('desktop Harness is not installed')
-      return createHostSupervisor({
+      return prepareHarnessHost(createHostSupervisor({
         spawnHost: () => spawnDshWeb({
           ...launch,
-          env: { ...process.env, DSH_DESKTOP: '1', DSH_DESKTOP_API_TOKEN: hostApiToken },
+          env: parentBoundEnvironment({ ...hostEnvironment, DSH_DESKTOP: '1', DSH_DESKTOP_API_TOKEN: hostApiToken }),
         }),
         log: chunk => process.stderr.write(chunk),
-      })
+      }), hostEnvironmentReady)
     },
     harnessSetupRequired: () => harnessLaunch() === undefined,
     observeHarnessNotifications: async (origin, contents) => {

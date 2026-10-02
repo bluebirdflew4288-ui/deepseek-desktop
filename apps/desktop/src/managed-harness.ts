@@ -39,6 +39,7 @@ import {
   isManagedHarnessVersionName,
   type ManagedHarnessLayout,
 } from './managed-harness-paths.ts'
+import { harnessHostEnvironment } from './harness-host-environment.ts'
 import {
   managedProcessEnvironment,
   parentBoundEnvironment,
@@ -279,6 +280,8 @@ export interface ManagedHarnessRuntimeOptions {
   readonly cwd: string
   /** Run the Electron executable as its bundled Node runtime. */
   readonly electronRunAsNode?: boolean
+  /** Prepared daily Host environment; never consulted by maintenance transactions. */
+  readonly hostEnvironment?: () => NodeJS.ProcessEnv
   /** Official release metadata source. */
   readonly releaseSource: HarnessReleaseSource
   /** Installer producing staged program directories. */
@@ -1179,7 +1182,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
             nodeExecutable: options.nodeExecutable,
             cliEntry: launch.cliEntry,
             cwd: options.cwd,
-            env: parentBoundEnvironment({ ...process.env, DSH_DESKTOP: '1', DSH_DESKTOP_API_TOKEN: hostApiToken, DSH_DESKTOP_OWNER_NONCE: ownerNonce }),
+            env: parentBoundEnvironment({ ...(options.hostEnvironment?.() ?? harnessHostEnvironment(process.env, {}, '', {})), DSH_DESKTOP: '1', DSH_DESKTOP_API_TOKEN: hostApiToken, DSH_DESKTOP_OWNER_NONCE: ownerNonce }),
             ...(options.electronRunAsNode === undefined ? {} : { electronRunAsNode: options.electronRunAsNode }),
             suppressBrowserHandoff: launch.suppressBrowserHandoff,
           })

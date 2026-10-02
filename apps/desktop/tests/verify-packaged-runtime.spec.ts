@@ -78,6 +78,7 @@ async function stagedNpm(options: { version?: string; bundled?: boolean } = {}):
   const npm = join(stagedRoot, current.name)
   await mkdir(join(npm, current.cliEntry, '..'), { recursive: true })
   await writeFile(join(npm, current.cliEntry), '')
+  await writeFile(join(npm, 'bin/npx-cli.js'), '')
   await writeFile(join(npm, 'package.json'), `${JSON.stringify({
     name: current.name,
     version: options.version ?? current.version,
@@ -125,6 +126,7 @@ describe('packaged desktop runtime verification', () => {
       await verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)
       const packagedNpmCli = join(appOutDir, 'resources', 'npm', 'bin', 'npm-cli.js')
       await writeFile(packagedNpmCli, `process.stdout.write('${(await pin()).version}')`)
+      await writeFile(join(appOutDir, 'resources/npm/bin/npx-cli.js'), `process.stdout.write('${(await pin()).version}')`)
       await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).resolves.toBeUndefined()
       await writeFile(packagedNpmCli, 'process.exit(17)')
       await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).rejects.toThrow(/did not execute/)

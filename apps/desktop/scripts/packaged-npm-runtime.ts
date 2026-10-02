@@ -70,7 +70,7 @@ export async function assertNpmRuntime(
   electronExecutable: string | undefined,
 ): Promise<void> {
   const npm = join(resourcesRoot, pin.name)
-  for (const required of [pin.cliEntry, 'package.json', pin.licenseFile]) {
+  for (const required of [pin.cliEntry, 'bin/npx-cli.js', 'package.json', pin.licenseFile]) {
     if (!existsSync(join(npm, required))) {
       throw new Error(`packaged npm runtime is missing ${required}`)
     }

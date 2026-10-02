@@ -7,6 +7,8 @@ import { access, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { AfterPackContext } from 'electron-builder'
 import { fileURLToPath } from 'node:url'
+import { placeDevelopmentToolLaunchers, developmentLauncherOptions } from '../src/development-tool-launchers.ts'
+import { assertPackagedDevelopmentTools } from './packaged-development-tools.ts'
 import { assertNpmRuntime, placeNpmRuntime, readNpmRuntimePin } from './packaged-npm-runtime.ts'
 
 const REQUIRED_SHELL_FILES = [
@@ -43,6 +45,7 @@ const REQUIRED_SHELL_FILES = [
 function electronExecutable(context: AfterPackContext): string | undefined {
   const product = context.packager.appInfo.productFilename
   if (context.electronPlatformName === 'win32') return join(context.appOutDir, `${product}.exe`)
+  if (context.electronPlatformName === 'linux') return join(context.appOutDir, context.packager.appInfo.sanitizedName.toLowerCase())
   if (context.electronPlatformName !== 'darwin') return undefined
   return join(context.appOutDir, `${product}.app`, 'Contents', 'MacOS', product)
 }
@@ -64,10 +67,17 @@ export async function verifyPackagedRuntime(context: AfterPackContext, stagedNpm
     await access(join(resources, ...segments))
   }
   const pin = await placeNpmRuntime(resources, stagedNpmRoot)
+  const launcherExecutable = electronExecutable(context)
+  if (launcherExecutable === undefined) throw new Error('Unsupported Desktop launcher package layout')
+  await placeDevelopmentToolLaunchers({
+    ...developmentLauncherOptions(join(resources, 'development-bin'), launcherExecutable, join(resources, 'npm')),
+    platform: context.electronPlatformName as NodeJS.Platform,
+  })
   // Windows Electron Builder edits/signs the main executable after `afterPack`.
   // Do not open that executable until all artifacts have been built.
   const executable = context.electronPlatformName === 'win32' ? undefined : electronExecutable(context)
   await assertNpmRuntime(resources, pin, executable)
+  await assertPackagedDevelopmentTools(resources, executable, pin.version)
 }
 
 /**
@@ -86,6 +96,7 @@ export async function verifyWindowsPackagedRuntime(appOutDir: string, productFil
   const executable = join(appOutDir, `${productFilename}.exe`)
   await access(executable)
   await assertNpmRuntime(resources, pin, executable)
+  await assertPackagedDevelopmentTools(resources, executable, pin.version)
 }
 
 async function verifyWindowsPackagedRuntimeFromDesktopRoot(): Promise<void> {

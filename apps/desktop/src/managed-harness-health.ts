@@ -2,8 +2,8 @@
  * Proves one Harness program directory can actually serve its Web UI before the
  * desktop promotes it.
  *
- * The check launches the candidate with the same executable, arguments, and
- * environment the production launch uses, against a Harness home the desktop
+ * The check launches the candidate with the production executable and arguments in
+ * a controlled maintenance environment, against a Harness home the desktop
  * owns and deletes afterwards. Promotion therefore never writes to the user's
  * real Harness data, and a version that cannot boot is never switched to.
  */
@@ -61,7 +61,7 @@ export interface HarnessHealthCheckOptions {
 }
 
 /**
- * Create a health check launching candidates exactly as production does.
+ * Create a health check using production launch arguments and an isolated maintenance environment.
  * @param options - Layout, runtime executable, and lifecycle bounds.
  * @returns A check that leaves no process and no Harness home behind.
  */

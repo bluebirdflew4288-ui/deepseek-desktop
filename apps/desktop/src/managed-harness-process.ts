@@ -4,7 +4,7 @@
  *
  * Each one spawns with an explicit environment and an explicit search path
  * rather than inheriting the launching shell's, so a managed install, health
- * check, or Harness launch behaves the same on every machine and cannot pick up
+ * check behaves independently of the launching shell and cannot pick up
  * a Node, package manager, registry, or proxy the user happens to have.
  */
 

@@ -108,6 +108,7 @@ describe('desktop Electron fixture artifact preflight', () => {
       'tests/chat-completion.electron.spec.ts',
       'tests/deepseek-memory.electron.spec.ts',
       'tests/dual-mode.electron.spec.ts',
+      'tests/source-development.electron.spec.ts',
     ])
     for (const file of launchers) {
       const source = readFileSync(file, 'utf8')

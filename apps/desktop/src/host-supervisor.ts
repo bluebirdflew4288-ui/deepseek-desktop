@@ -2,6 +2,7 @@
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
+import { electronNodeBootstrapArgument } from './electron-node-bootstrap.ts'
 
 const READINESS_PREFIX = 'dsh web: '
 const DEFAULT_READINESS_TIMEOUT_MS = 90_000
@@ -350,6 +351,7 @@ export function spawnDshWeb(options: SpawnDshWebOptions): HostChild {
     ? { ...options.env, ELECTRON_RUN_AS_NODE: '1' }
     : options.env
   const args = [
+    ...(options.electronRunAsNode ? [electronNodeBootstrapArgument()] : []),
     '--expose-internals', options.cliEntry, 'web', '--host', '127.0.0.1', '--port', '0',
     ...(options.suppressBrowserHandoff === true ? ['--no-open'] : []),
   ]

@@ -71,6 +71,14 @@ Desktop 状态文件通过原子写入保存最小通知元数据和去重记录
 
 取消在 `preparing` 与 `installing` 阶段被接受，这两个阶段不会向事务的 staging 目录之外写入任何内容；在 `verifying` 与 `health` 阶段被拒绝，那里正是晋升门；此时控件变灰、保持可点击，并说明它不会动作的原因。取消请求在发出前先经确认，运行时拒绝的取消不会被呈现为已经发生。原版本号在事务开始前读取，因此重装正在运行的版本绝不会被绘制为升级，完成后的卡片说明被晋升的版本在 Harness 重启后生效。回滚保留其原有的原生对话框报告方式，Harness 标签页的首次安装按钮保留其自身路径。参见[更新卡片决策](../../.agents/notes/implemented/feature/2026-09-18-harness-update-card.md)。
 
+## Harness 开发环境
+
+日常 Harness Host 使用独立于 Electron 与 Chat 的环境对象。macOS/Linux 会读取一次账户的交互式登录 shell，所有候选共用 10 秒预算，并支持取消、有长度上限的 NUL 分隔输出和系统 shell 回退。发现结果只允许 PATH 与 JAVA_HOME、ANDROID_HOME、ANDROID_SDK_ROOT、GOPATH、GOROOT、CARGO_HOME、RUSTUP_HOME 进入。失败时保留继承的开发路径；Windows 直接使用继承环境。发现过程会执行 shell rc 文件，但 Desktop 不修改这些文件。
+
+任务 PATH 保留用户开发路径的原顺序，追加缺失的继承路径与系统目录，最后加入打包版 node/npm/npx 兜底 launcher；丢弃空路径和相对路径并去重。命令独立解析：命令不存在时可以命中兜底，但已有命令的执行失败或版本不兼容不会触发另一套 runtime。兜底 launcher 使用 Electron Node 模式和 bundled npm；npm lifecycle scripts 按任务 PATH 查找 node。项目 npm 使用普通 npmrc、registry 与 cache 规则。兜底 npm/npx 的全局 prefix 默认位于用户目录（POSIX 为 HOME/.local，Windows 为 APPDATA/npm 或 USERPROFILE/.local）；显式 PREFIX 与 npm 配置保持优先级。默认全局命令目录补在用户/系统路径之后、兜底 launcher 之前；自定义 prefix 需要自己的 PATH 设置。Git、Python、JDK、编译器及其他 SDK 仍属于本机工具；开发 PATH 中已有的包管理器可供 Agent 在正常权限下使用。Windows launcher 是 cmd/PowerShell 命令，不是用于无 shell CreateProcess 的原生可执行文件。
+
+Host 启动清理继承的 NODE_* 设置（只保留 NODE_EXTRA_CA_CERTS、NODE_USE_SYSTEM_CA 与 NODE_USE_ENV_PROXY，移除 NODE_TLS_REJECT_UNAUTHORIZED）、DSH_* 与 ELECTRON_* 命名空间、动态加载器钩子、OpenSSL 配置钩子与 shell 启动钩子。Desktop 显式恢复选定的 DSH_HOME、启动身份和 token、Electron Node 模式，最后加入父进程 watchdog。Electron Node 调用预加载 Desktop bootstrap，在应用代码执行前移除 ELECTRON_RUN_AS_NODE；普通任务、npm lifecycle scripts 与 npx 命令不会继承模式变量。公共 child_process API 仅在无 shell、直接复用 process.execPath 时保留 Node 模式和同一 preload，包括 Harness 内部 runner 与 fork；外部可执行文件保持自身启动模式。bootstrap 不修改已安装 Harness 或 bundled npm。从不修改 Electron process.env。托管安装、更新、重装与回滚健康检查继续使用隔离的 PATH、npmrc、registry 和 cache。源码开发使用 DSH_DESKTOP_NODE_EXECUTABLE 或 PATH 中的 node 启动 Harness，不需要已暂存的 npm runtime，也不加入打包版兜底命令。环境发现只在每次 Desktop 启动时执行一次：工具安装到已有 PATH 目录后可立即找到；新增 PATH 目录需要重启 Desktop 或显式设置任务环境。Host 启动不会继承 NODE_OPTIONS 或 NODE_PATH。本机开发工具可以使用任务显式提供的 runtime 钩子，而不改变 Host 默认环境；Desktop 兜底 node/npm/npx 会清除 NODE_OPTIONS 和 NODE_PATH，避免外部 startup hooks 干扰 Electron Node 启动。参见[混合环境决策](../../.agents/notes/implemented/architecture/2026-10-02-desktop-hybrid-development-environment.md)。
+
 ## 打包
 
 本地打包命令会执行完整的仓库构建，为 Managed Harness 暂存固定版本 npm 运行时，并为当前平台生成未封装应用。固定 Harness 依赖闭包不会进入最终包：
