@@ -450,14 +450,41 @@ describe('managed Harness installer', () => {
     expect(seen[0]?.env.PATH).toBe(managedSearchPath())
     await expect(readdir(target).then(entries => entries.sort())).resolves.toEqual(['package.json'])
     const stagingManifest = JSON.parse(await readFile(join(target, 'package.json'), 'utf8')) as {
+      version?: string
       overrides?: Record<string, string>
     }
-    expect(stagingManifest.overrides).toEqual({
-      '@deepseek-ai/cordis': '4.0.2',
-      '@deepseek-ai/cordis-plugin-loader': '1.0.3',
-    })
+    expect(stagingManifest.version).toBe('0.0.0')
+    expect(stagingManifest.overrides).toBeUndefined()
     expect(await readFile(layout.npmUserConfig, 'utf8')).toBe('')
     expect(await readFile(layout.npmGlobalConfig, 'utf8')).toBe('')
+  })
+
+  it.each([
+    ['0.1.5-rc.2', {
+      '@deepseek-ai/cordis': '4.0.2',
+      '@deepseek-ai/cordis-plugin-loader': '1.0.3',
+    }],
+    ['0.1.5-rc.3', undefined],
+    ['0.1.7-rc.2', undefined],
+    ['0.1.8-rc.1', undefined],
+    ['0.1.9-rc.1', undefined],
+  ] as const)('limits legacy Cordis overrides to exact Harness release %s', async (version, expectedOverrides) => {
+    const layout = managedHarnessLayout(root)
+    const target = layout.stagingDirectory(version)
+    await mkdir(layout.staging, { recursive: true })
+    const installer = createNpmHarnessInstaller({
+      layout,
+      nodeExecutable: '/bin/true',
+      npmCliEntry: '/npm-cli.js',
+      runProcess: async () => ({ exitCode: 0, signal: null, output: '' }),
+    })
+
+    await installer.install({ directory: target, version })
+
+    const manifest = JSON.parse(await readFile(join(target, 'package.json'), 'utf8')) as {
+      overrides?: Record<string, string>
+    }
+    expect(manifest.overrides).toEqual(expectedOverrides)
   })
 
   it.each(['cache-root', 'config-root', 'user-config-file'] as const)(

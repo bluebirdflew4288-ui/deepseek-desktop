@@ -8,9 +8,9 @@ An integrated community desktop experience for official DeepSeek Chat, local Cha
 
 ## Download
 
-[macOS Apple Silicon — DMG (recommended)](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.zip) · [All releases](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
+[macOS Apple Silicon — DMG (recommended)](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.8/DeepSeek-Desktop-1.0.8-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.8/DeepSeek-Desktop-1.0.8-mac-arm64.zip) · [All releases](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
 
-Desktop v1.0.7. macOS packages are ad hoc signed and not notarized; installation and first-launch guidance is included in the DMG. Windows x64 downloads and their signing status are listed on the [Release page](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/tag/v1.0.7).
+Desktop v1.0.8. macOS packages are ad hoc signed and not notarized; installation and first-launch guidance is included in the DMG. Windows downloads are paused pending update-function repair and acceptance.
 
 ## Preview
 
@@ -75,7 +75,7 @@ Recovery handles interrupted program transactions. Harness rollback currently re
 
 ## Installation
 
-Download the packaged app from the links above. On macOS Apple Silicon, open the DMG and drag DeepSeek Desktop into Applications. The DMG includes `安装指南.txt` for first-launch Gatekeeper prompts; the app has an ad hoc signature, with no Developer ID distribution signature or notarization. The Windows x64 EXE and ZIP are unsigned (`NotSigned`); SmartScreen may show a publisher warning. Check the Release's SHA-256 hashes against your download. Linux Desktop packages are not a current release target.
+Download the packaged app from the links above. On macOS Apple Silicon, open the DMG and drag DeepSeek Desktop into Applications. The DMG includes `安装指南.txt` for first-launch Gatekeeper prompts; the app has an ad hoc signature, with no Developer ID distribution signature or notarization. Windows downloads are not provided while its update functionality awaits repair and acceptance. Check the Release's SHA-256 hashes against your download. Linux Desktop packages are not a current release target.
 
 ### Packaged users
 

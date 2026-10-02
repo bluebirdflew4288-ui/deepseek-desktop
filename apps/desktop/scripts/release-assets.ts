@@ -71,6 +71,9 @@ export function planAssetSync(
   const remoteNames = new Set<string>()
   for (const asset of remoteAssets) {
     if (remoteNames.has(asset.name)) throw new Error(`GitHub Release contains duplicate asset name: ${asset.name}`)
+    if (!expected.some(candidate => candidate.name === asset.name)) {
+      throw new Error(`GitHub Release contains an undeclared asset: ${asset.name}`)
+    }
     remoteNames.add(asset.name)
   }
   const upload: ReleaseAsset[] = []
@@ -203,6 +206,7 @@ export function renderDesktopReleaseNotes(
   releaseToolingCommit: string,
   assetHashes: string,
   windowsSigningDetails: { readonly en: string; readonly zh: string },
+  electronVersion: string,
 ): string {
   for (const [label, commit] of [
     ['application source', applicationSourceCommit],
@@ -217,6 +221,7 @@ export function renderDesktopReleaseNotes(
     .replaceAll('{{APPLICATION_SOURCE_COMMIT}}', applicationSourceCommit)
     .replaceAll('{{RELEASE_TOOLING_COMMIT}}', releaseToolingCommit)
     .replaceAll('{{ASSET_HASHES}}', assetHashes)
+    .replaceAll('{{ELECTRON_VERSION}}', electronVersion)
     .replaceAll('{{WINDOWS_SIGNING_DETAILS}}', windowsSigningDetails.en)
     .replaceAll('{{WINDOWS_SIGNING_DETAILS_ZH}}', windowsSigningDetails.zh)
 }
@@ -276,13 +281,14 @@ function publishRelease(repo: string, id: number, body: string): void {
   runGh(['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `body=${body}`, '-F', 'draft=false'])
 }
 
-function readExpectedAssets(root: string, tag: string): ReleaseAsset[] {
+function readExpectedAssets(root: string, tag: string, platforms: readonly DesktopReleasePlatform[]): ReleaseAsset[] {
   const version = tag.slice(1)
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(tag)) {
     throw new Error(`Invalid desktop release tag: ${tag}`)
   }
   const assets: ReleaseAsset[] = []
   for (const [platform, directory] of [['mac-arm64', 'mac'], ['win-x64', 'win']] as const) {
+    if (!platforms.includes(platform)) continue
     const platformRoot = join(root, directory)
     const manifestPath = join(platformRoot, 'release-manifest.json')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as DesktopPlatformManifest
@@ -320,22 +326,33 @@ export async function syncDesktopRelease(
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) throw new Error('Invalid GitHub repository identity')
   const root = resolve(required(args, 'artifacts-root'))
   const notesTemplate = resolve(required(args, 'notes-template'))
-  const expected = readExpectedAssets(root, tag)
+  const platforms = required(args, 'platforms').split(',')
+  if (platforms.some(platform => platform !== 'mac-arm64' && platform !== 'win-x64')
+    || new Set(platforms).size !== platforms.length) {
+    throw new Error('Expected distinct release platforms: mac-arm64 and/or win-x64')
+  }
+  const expected = readExpectedAssets(root, tag, platforms as DesktopReleasePlatform[])
   const version = tag.slice(1)
-  const windowsSigningManifest = readWindowsSigningManifest(root, version)
+  const windowsSigningDetails = platforms.includes('win-x64')
+    ? windowsSigningReleaseNotes(readWindowsSigningManifest(root, version).mode)
+    : { en: 'Not published; Windows update functionality is awaiting repair and validation.', zh: '暂不发布；Windows 更新功能待修复并验证。' }
   const applicationSourceCommit = required(args, 'application-source-commit')
   const releaseToolingCommit = required(args, 'release-tooling-commit')
   const hashes = expected.map(asset => `- ${asset.name}: SHA-256 \`${asset.sha256}\``).join('\n')
+  const desktopPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    devDependencies: { electron: string }
+  }
   const notes = renderDesktopReleaseNotes(
     readFileSync(notesTemplate, 'utf8'),
     version,
     applicationSourceCommit,
     releaseToolingCommit,
     hashes,
-    windowsSigningReleaseNotes(windowsSigningManifest.mode),
+    windowsSigningDetails,
+    desktopPackage.devDependencies.electron,
   )
 
-  const expectedSigningDetails = windowsSigningReleaseNotes(windowsSigningManifest.mode).en
+  const expectedSigningDetails = windowsSigningDetails.en
   let release = api.findRelease(repo, tag)
   if (release === undefined) {
     // Use the create response directly: a just-created draft may not yet be
@@ -372,6 +389,10 @@ export async function syncDesktopRelease(
     }
 
     const verifiedAssets = api.listAssets(repo, id)
+    if (verifiedAssets.length !== expected.length
+      || verifiedAssets.some(asset => !expected.some(candidate => candidate.name === asset.name))) {
+      throw new Error('GitHub Release asset set differs from the declared platforms')
+    }
     for (const asset of expected) {
       if (!verifiedAssets.some(existing => existing.name === asset.name)) {
         throw new Error(`Release asset is absent after upload: ${asset.name}`)
@@ -384,7 +405,7 @@ export async function syncDesktopRelease(
       release = api.findRelease(repo, tag)
       if (release?.draft !== false) throw new Error('GitHub Release did not leave draft state after verification')
     }
-    console.log(`Verified immutable desktop Release ${tag}: ${expected.length} assets; macOS arm64 and Windows x64.`)
+    console.log(`Verified immutable desktop Release ${tag}: ${expected.length} assets; ${platforms.join(', ')}.`)
   } finally {
     rmSync(temp, { recursive: true, force: true })
   }

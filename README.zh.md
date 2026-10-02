@@ -8,9 +8,9 @@
 
 ## 下载
 
-[macOS Apple Silicon — DMG（推荐）](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.zip) · [所有版本](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
+[macOS Apple Silicon — DMG（推荐）](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.8/DeepSeek-Desktop-1.0.8-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.8/DeepSeek-Desktop-1.0.8-mac-arm64.zip) · [所有版本](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
 
-Desktop v1.0.7。macOS 安装包使用 ad hoc 签名，未公证；DMG 内附安装与首次打开说明。Windows x64 下载与签名状态见 [Release 页面](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/tag/v1.0.7)。
+Desktop v1.0.8。macOS 安装包使用 ad hoc 签名，未公证；DMG 内附安装与首次打开说明。Windows 更新功能待修复并验收，暂不提供下载。
 
 ## 预览
 
@@ -75,7 +75,7 @@ Harness 提供官方 WebUI 以及工作区、智能体和工具能力。请独�
 
 ## 安装
 
-通过上方链接下载打包应用。在 macOS Apple Silicon 上打开 DMG，将 DeepSeek Desktop 拖入“应用程序”。DMG 内含 `安装指南.txt`，说明首次打开时可能出现的 Gatekeeper 提示；应用仅使用 ad hoc 签名，未使用 Developer ID 分发签名，也未公证。Windows x64 EXE 与 ZIP 未签名（`NotSigned`），SmartScreen 可能显示发布者警告。请将下载文件的 SHA-256 与 Release 中的校验值核对。Linux Desktop 安装包不是当前发布目标。
+通过上方链接下载打包应用。在 macOS Apple Silicon 上打开 DMG，将 DeepSeek Desktop 拖入“应用程序”。DMG 内含 `安装指南.txt`，说明首次打开时可能出现的 Gatekeeper 提示；应用仅使用 ad hoc 签名，未使用 Developer ID 分发签名，也未公证。Windows 更新功能待修复并验收，暂不提供下载。请将下载文件的 SHA-256 与 Release 中的校验值核对。Linux Desktop 安装包不是当前发布目标。
 
 ### 打包应用用户
 

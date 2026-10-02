@@ -105,11 +105,11 @@ Windows 恢复流程等待引用托管程序目录的进程退出。如果无法
 
 Windows 默认启动时，可替换的 Desktop 状态文件和托管 Harness 安装位于 `%USERPROFILE%\\.deepseek-desktop`；Chromium 的 Chat 配置、登录和 Memory 仍保存在 Electron 的漫游用户数据目录。显式传入 `--user-data-dir` 时，所有 Desktop 自有文件都留在所选配置目录。升级后首次启动仅在新状态文件不存在时，才从旧状态文件复制已验证的模式、外观和语言偏好；旧文件与浏览器配置不会被移动或删除。
 
-托管安装 manifest 将 Cordis 4.0.2 与 `cordis-plugin-loader` 1.0.3 固定为一组。Harness 1.0.5 发布包在安装根目录使用 4.0.4 与 1.0.5，而 DSH 子树仍使用旧版本；递归 profile entry 因此会报 `entry._await is not a function`。旧版本配对已在仅含程序包的 synthetic profile 中启动，并到达本机 HTTP token fence。试用机上的干净 npm 暂存安装尚未验证，本轮也没有修复当前默认 profile。必须等暂存安装通过安装器健康检查后，才能替换现有托管程序目录；不要手动覆盖该目录。
+托管安装 manifest 仅对 Harness `0.1.5-rc.2` 固定 Cordis 4.0.2 与 `cordis-plugin-loader` 1.0.3，该发布包的依赖范围会混用不兼容的 loader 闭包。其他 Harness 版本使用各自发布的依赖。安装或更新必须通过暂存健康检查才能提升；不要手动覆盖托管程序目录。
 
 ### 自动 GitHub 发布
 
-推送一个版本与 `apps/desktop/package.json` 一致、且位于 `main` 历史中的 `vX.Y.Z` 标签会启动 `.github/workflows/desktop-release.yml`。原生 runner 构建 macOS Apple Silicon DMG/ZIP 和 Windows x64 NSIS/ZIP。macOS 产物仅使用 ad hoc 签名，未使用 Developer ID 签名或公证。Windows 正式发布必须配置 PFX、密码、精确匹配的预期 Publisher Subject 和 RFC 3161 时间戳；安装器与应用可执行文件必须通过可信 Authenticode 验证后才可上传。签名输入缺失或验证失败都会阻止发布。工作流先创建草稿 Release，再核对明确列出的产物清单及 SHA-256；不会覆盖哈希不匹配的已有产物。工作流不发布 Desktop 更新器 metadata。
+推送与 `apps/desktop/package.json` 一致且位于 `main` 历史中的 `vX.Y.Z` 标签会启动 [Desktop Release 工作流](../../.github/workflows/desktop-release.yml)。原生 macOS arm64 runner 从该精确提交生成 DMG/ZIP。依赖锁文件固定 Electron；上传前通过实际可执行文件探测，确认安装后的运行时与打包后的运行时都符合 Desktop 包内固定版本。Mac 产物仅使用 ad hoc 签名，未公证。Windows 发布暂停，待更新功能修复并验收；工作流只构建和发布 Mac 资产。Release 在精确的声明资产集合、SHA-256 与来源提交验证通过前保持 draft。不提供 Desktop App 自动更新元数据。参见[运行时与平台发布决策](../../.agents/notes/implemented/process/2026-10-02-desktop-release-runtime-and-platform-validation.md)。
 
 ### 已签名的 macOS DMG
 
@@ -153,7 +153,7 @@ rmdir "$MOUNT_POINT"
 
 首个桌面装配使用回环 HTTP Host。renderer 和 Host 协议保持不变，因此后续可替换为 GUI 架构预留的 IPC carrier，而无需改动产品功能。
 
-GitHub Actions 的 Windows x64 正式发布要求可信 Authenticode 签名；签名凭据不可用时会失败关闭。上文的未签名 Windows 1.0.5 本地试用构建命令仅供本地测试。macOS 发布产物仍只有 ad hoc 签名，未使用 Developer ID 分发签名或公证。Linux 发布打包目前不在目标范围内。
+Windows 打包与 Authenticode 验证工具仍可用于开发，但在更新功能修复并验收前，Windows 不进入公开 Desktop Release 工作流。Mac 公开产物保持 ad hoc 签名且未公证。Linux 发布打包不在当前范围内。
 
 本地 Electron 场景验证 Desktop 生命周期与存储策略，不验证在线 DeepSeek 网站的兼容性。DeepSeek 可以独立改变认证来源、WAF 行为、页面要求或嵌入策略。任何登录方式只有在 macOS 和 Windows 上都通过以下冒烟流程后，才具备发布资格：
 

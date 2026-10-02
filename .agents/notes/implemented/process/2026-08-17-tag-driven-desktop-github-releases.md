@@ -12,15 +12,13 @@ A desktop release also needs platform-native runtime staging. Building both plat
 
 ## Decision
 
-`.github/workflows/desktop-release.yml` owns desktop GitHub Releases. A pushed `vX.Y.Z` tag must exactly match `apps/desktop/package.json` and point into `origin/main` history before either native build starts. Each job performs an immutable install, confirms runner architecture, builds the repository, stages the pinned npm runtime, and prepares a manifest containing only its declared distributables. Desktop remains at version `1.0.5`; the workflow never changes package versions.
+The [Desktop Release workflow](../../../../.github/workflows/desktop-release.yml) owns desktop GitHub Releases. A pushed tag must exactly match the Desktop package version and point into origin/main history. Source and tooling are checked out from that immutable tag; the workflow does not change package versions. Native runners install frozen dependencies, stage the pinned npm runtime and produce explicit artifact manifests.
 
-The macOS Apple Silicon job produces DMG and ZIP files with an ad hoc signature only; these artifacts have no Developer ID distribution signature and are not notarized. The Windows x64 job requires a PFX, its password, the expected full certificate Subject, and an RFC 3161 timestamp endpoint before Electron Builder runs. `forceCodeSigning` makes a missing signature fatal. Before upload, Authenticode verification checks the installer and packaged application executable for a valid trusted chain, exact full Subject, and timestamp certificate with the time-stamping EKU; `signtool verify /pa /all /v` must also succeed. The PFX and password are available only to this build step and never enter the artifact or logs.
+The [runtime and platform validation decision](2026-10-02-desktop-release-runtime-and-platform-validation.md) owns the current Electron pin and supported release platforms. It partially supersedes this note's two-platform publication requirement. Mac artifacts use ad hoc signatures and are not notarized; Windows publication is paused pending update-function repair and acceptance.
 
-Each platform uploads a manifest and only the named DMG/ZIP or NSIS/ZIP files. No updater metadata is generated or uploaded. The Release job has `contents: write` while build jobs remain read-only. It creates a draft, reconciles the exact four manifest assets by SHA-256, skips identical existing assets, and refuses a same-name asset with a different hash. It never uses `--clobber`, leaves existing assets outside the manifest untouched, verifies hashes and source-commit provenance, then publishes the draft. An already published release is a no-op only when its provenance and every declared hash match; missing or changed assets fail closed.
+Build jobs have read-only repository permissions. Only the Release job receives contents: write. It creates a draft, reconciles the exact declared asset set by SHA-256, skips identical assets and refuses different hashes, missing published assets or undeclared assets. It never overwrites assets. Publication follows full asset and provenance verification; Desktop updater metadata is not generated.
 
-The desktop package carries its own `1.0.5` application version. It does not change the shared pre-release version of the Harness npm family, whose `dsh-v*` tags and registry publication remain independent.
-
-The workflow does not claim Developer ID signing or notarization for macOS. Windows release signing credentials and the expected publisher/timestamp settings are currently absent, so the Windows job intentionally fails before producing release artifacts. The unsigned Windows 1.0.5 local trial is not a release candidate.
+Desktop App versions and vX.Y.Z tags remain independent of the Harness npm family's dsh-v* tags and registry versions.
 
 ## Alternatives considered
 
@@ -28,8 +26,8 @@ The workflow does not claim Developer ID signing or notarization for macOS. Wind
 
 **Publish only unpacked application directories.** Directories are useful for local verification but inconvenient GitHub Release downloads. DMG, NSIS, and ZIP cover installation and portable inspection without committing generated output.
 
-**Allow an unsigned Windows Release until credentials arrive.** Rejected because an unsigned installer cannot establish the expected publisher identity and risks misleading users. The workflow fails before publishing until the trusted signing inputs are configured.
+**Treat signature status as platform acceptance.** Signing checks establish publisher identity, not update functionality. The current release decision requires platform acceptance separately from signature status.
 
 ## Consequences
 
-A tag must match the unchanged desktop package version and be on `main` history. Failure on either platform prevents publishing, so a Release always has both declared targets. macOS remains ad hoc signed and unnotarized; Windows must pass trusted Authenticode and timestamp verification. Windows signing secrets are scoped to one build step, while release mutation permission remains isolated to the Release job.
+Tags and asset hashes identify immutable source releases. Only declared, accepted platforms are published; any required build or verification failure keeps the Release unpublished. Platform-specific packaging and signing can remain available independently of public release eligibility.

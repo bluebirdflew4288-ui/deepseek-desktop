@@ -1,10 +1,9 @@
 /**
  * Bounded diagnostics for managed Harness operations.
  *
- * The log carries operation facts only — no launch token, bearer credential,
- * cookie, chat content, or Memory content — because it is written from fields
- * this module names rather than from captured process output. Detail that a
- * user needs after a failure stays here; the shell surfaces a short message.
+ * The log carries operation facts and allowlisted Host startup categories, not
+ * raw process output, launch tokens, credentials, or user content. Detail that
+ * a user needs after a failure stays here; the shell surfaces a short message.
  */
 
 import { appendFile, lstat, rename, rm } from 'node:fs/promises'
@@ -16,6 +15,24 @@ const DEFAULT_MAX_BYTES = 1_048_576
 
 /** Bound on one recorded failure description. */
 const MAX_FAILURE_CHARS = 512
+
+const HOST_OUTPUT_MARKER = '\nHost output:\n'
+const FAILURE_FALLBACK = 'managed Harness operation failed'
+const HOST_ERROR_CODES = [
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_PACKAGE_IMPORT_NOT_DEFINED',
+  'ERR_MODULE_NOT_FOUND',
+  'MODULE_NOT_FOUND',
+  'ERR_DLOPEN_FAILED',
+  'ERR_UNKNOWN_BUILTIN_MODULE',
+] as const
+const HOST_PACKAGES = [
+  '@deepseek-ai/cordis-plugin-loader',
+  '@deepseek-ai/cordis',
+  'node-addon-require-builtin-win32-x64-msvc',
+  'node-addon-require-builtin',
+  'node-addon-native-custom-loader',
+] as const
 
 /** Outcome of one health check. */
 export type ManagedHarnessHealth = 'pass' | 'fail'
@@ -66,14 +83,70 @@ export interface ManagedHarnessDiagnosticsOptions {
 }
 
 /**
- * Describe one failure for the log without carrying a stack trace.
+ * Describe one failure for the log without carrying raw Host output.
  * @param error - Failure to summarize.
- * @returns The first line of its message, truncated.
+ * @returns A bounded summary with recognized Host errors classified.
  */
 export function describeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   const firstLine = message.split('\n', 1)[0] ?? ''
-  return firstLine.length > MAX_FAILURE_CHARS ? `${firstLine.slice(0, MAX_FAILURE_CHARS)}…` : firstLine
+
+  if (/^desktop Host readiness\b/iu.test(firstLine)) return 'desktop Host readiness failed'
+
+  const hasHostOutput = message.includes(HOST_OUTPUT_MARKER)
+  const hostExit = /^desktop Host exited before readiness \(code (-?\d+|null), signal (null|SIG[A-Z0-9]+)\)$/u.exec(firstLine)
+  if (hasHostOutput || hostExit !== null || /^desktop Host failed to spawn\b/iu.test(firstLine)) {
+    const prefix = hostExit === null
+      ? 'desktop Host startup failed'
+      : `desktop Host exited before readiness (code ${hostExit[1]}, signal ${hostExit[2]})`
+    const category = classifyHostOutput(message)
+    return capFailure(category === undefined ? prefix : `${prefix}; ${category}`)
+  }
+
+  return capFailure(sanitizeFailureSummary(firstLine))
+}
+
+/** Return only diagnostic labels selected from fixed allowlists. */
+function classifyHostOutput(message: string): string | undefined {
+  if (/\b(?:unknown|unrecognized|invalid)\s+(?:cli\s+)?(?:option|argument)\b/iu.test(message)) {
+    return 'Host startup: unknown CLI option'
+  }
+
+  const packageName = HOST_PACKAGES.find(candidate => message.includes(candidate))
+  const errorCode = HOST_ERROR_CODES.find(candidate => new RegExp(`\\b${candidate}\\b`, 'u').test(message))
+
+  if (/node-addon-require-builtin.{0,100}\b(?:unsupported|no-context|no-getter|no-realm)\b/isu.test(message)) {
+    return 'Host startup: native addon unsupported (node-addon-require-builtin)'
+  }
+
+  if (errorCode !== undefined) {
+    return packageName === undefined
+      ? `Host startup: ${errorCode}`
+      : `Host startup: ${errorCode} (${packageName})`
+  }
+
+  if (packageName !== undefined && /\b(?:cannot|failed|failure|error|unsupported|not found|not exported)\b/iu.test(message)) {
+    return `Host startup: package load failure (${packageName})`
+  }
+
+  return undefined
+}
+
+/** Redact common secrets from legacy non-Host first-line summaries. */
+function sanitizeFailureSummary(value: string): string {
+  if (/\b(?:chat|memory|prompt)(?:\s+content)?\s*[:=]/iu.test(value)) return FAILURE_FALLBACK
+  if (/(?:\b[A-Z]:\\|\\\\|(?:^|\s)\/(?:Users|home|tmp|private|var|mnt)\/)/u.test(value)) return FAILURE_FALLBACK
+
+  return value
+    .replace(/\b(?:set-cookie|cookie)\s*[:=]\s*[^\r\n]*/giu, 'Cookie: [redacted]')
+    .replace(/\bBearer\s+[^\s,;]+/giu, 'Bearer [redacted]')
+    .replace(/\b((?:[A-Z0-9_-]*)(?:launch[-_ ]?token|access[-_ ]?token|refresh[-_ ]?token|token|api[-_ ]?key|authorization|password|credential|secret|cookie)(?:[A-Z0-9_-]*))\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, '$1=[redacted]')
+    .replace(/https?:\/\/[^\s]+/giu, '[redacted URL]')
+}
+
+/** Cap output including the ellipsis. */
+function capFailure(value: string): string {
+  return value.length > MAX_FAILURE_CHARS ? `${value.slice(0, MAX_FAILURE_CHARS - 1)}…` : value
 }
 
 /**

@@ -31,22 +31,26 @@ import { HARNESS_PACKAGE, HARNESS_REGISTRY } from './managed-harness-registry.ts
 const DEFAULT_INSTALL_TIMEOUT_MS = 900_000
 
 /**
- * Root manifest an install target carries so the package manager has one root
- * project and one compatible Cordis loader closure. The published rc.2 ranges
- * otherwise mix loader 1.0.3 / Cordis 4.0.2 in the DSH subtree with loader
- * 1.0.5 / Cordis 4.0.4 at the root. Recursive loader entries cross those
- * implementations and fail during boot. Keep the DSH subtree's pair unified:
- * this combination passed the synthetic Windows boot and HTTP health probe.
+ * Create the root manifest carried by an install target. The exact 0.1.5-rc.2
+ * release needs the legacy Cordis pair to keep its published dependency ranges
+ * on one compatible loader closure. Other releases use their published
+ * dependencies, so this workaround cannot constrain future releases.
+ * @param version - Exact Harness release being staged.
+ * @returns The staging package manifest.
  */
-const STAGING_MANIFEST = `${JSON.stringify({
-  name: 'dsh-managed-harness',
-  private: true,
-  version: '0.0.0',
-  overrides: {
-    '@deepseek-ai/cordis': '4.0.2',
-    '@deepseek-ai/cordis-plugin-loader': '1.0.3',
-  },
-})}\n`
+function stagingManifest(version: string): string {
+  return `${JSON.stringify({
+    name: 'dsh-managed-harness',
+    private: true,
+    version: '0.0.0',
+    ...(version === '0.1.5-rc.2' ? {
+      overrides: {
+        '@deepseek-ai/cordis': '4.0.2',
+        '@deepseek-ai/cordis-plugin-loader': '1.0.3',
+      },
+    } : {}),
+  })}\n`
+}
 
 /** One release the desktop installs. */
 export interface HarnessInstallRequest {
@@ -144,7 +148,7 @@ export function createNpmHarnessInstaller(options: NpmHarnessInstallerOptions): 
       // marker. Never erase a colliding path from inside the installer.
       await ensureSafeDirectoryTree(dirname(request.directory), trustedAnchor)
       await mkdir(request.directory, { recursive: false, mode: 0o700 })
-      await writeFile(`${request.directory}/package.json`, STAGING_MANIFEST, { mode: 0o600 })
+      await writeFile(`${request.directory}/package.json`, stagingManifest(request.version), { mode: 0o600 })
       return runProcess({
         command: options.nodeExecutable,
         args: harnessInstallArgs(options.npmCliEntry, options.layout, request),

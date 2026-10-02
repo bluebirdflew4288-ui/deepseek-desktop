@@ -8,80 +8,48 @@ const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/desktop
 const notes = readFileSync(resolve(repositoryRoot, '.github/release-notes/desktop.md'), 'utf8')
 
 describe('desktop release workflow guardrails', () => {
-  it('supports controlled recovery dispatch only from immutable allowlisted release tags', () => {
-    expect(workflow).toContain('workflow_dispatch:')
-    expect(workflow).toContain('release_tag:')
+  it('uses one immutable source tag for builds, tooling and release provenance', () => {
     expect(workflow).toContain('git rev-parse "$RELEASE_TAG^{commit}"')
-    expect(workflow).toContain('v1.0.5:8cdad7930310893150976929758b29975877fb28')
-    expect(workflow).toContain('v1.0.6:77d310dbdd82cf20110ccbbc790e77ed4d5f6d01')
-    expect(workflow).toContain('explicitly allowlisted immutable release tags and commits')
-    expect(workflow).toContain('ref: ${{ needs.verify-release-tag.outputs.release_tag }}')
-    expect(workflow).toContain('release_tooling_commit: ${{ steps.resolve-release-tag.outputs.release_tooling_commit }}')
-    expect(workflow).toContain('RELEASE_TOOLING_COMMIT="$(git rev-parse origin/main^{commit})"')
-  })
-
-  it('checks the exact tag and main ancestry before native builds', () => {
-    expect(workflow).toContain('verify-release-tag:')
     expect(workflow).toContain('git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main')
     expect(workflow).toContain('git show "$RELEASE_TAG:apps/desktop/package.json"')
     expect(workflow).toContain('"$RELEASE_TAG" != "v$TAG_VERSION"')
-    expect(workflow).toContain('needs: verify-release-tag')
-  })
-
-  it('maps Windows certificate secrets to only the signing build step', () => {
-    const signingStart = workflow.indexOf('- name: Build and verify Windows x64 distributables (signed or unsigned)')
-    const signingEnd = workflow.indexOf('- name: Write Windows x64 artifact manifest', signingStart)
-    expect(signingStart).toBeGreaterThanOrEqual(0)
-    expect(signingEnd).toBeGreaterThan(signingStart)
-    const signingStep = workflow.slice(signingStart, signingEnd)
-    expect(signingStep).toContain('secrets.WINDOWS_CERTIFICATE_PFX_BASE64')
-    expect(signingStep).toContain('secrets.WINDOWS_CERTIFICATE_PASSWORD')
-    expect(workflow.match(/secrets\.WINDOWS_CERTIFICATE_PFX_BASE64/gu)).toHaveLength(1)
-    expect(workflow.match(/secrets\.WINDOWS_CERTIFICATE_PASSWORD/gu)).toHaveLength(1)
-    expect(signingStep).toContain('scripts/windows-release-build.ts')
-    expect(workflow).toContain('apps/desktop/windows-signing-manifest.json')
-    expect(workflow).toContain('Verify Windows signing manifest before upload')
-    expect(workflow).toContain('Unsigned Windows signing manifest is not NotSigned')
-  })
-
-  it('keeps release notes status-driven instead of hard-coding a Windows signature claim', () => {
-    expect(notes).toContain('{{WINDOWS_SIGNING_DETAILS}}')
-    expect(notes).toContain('{{WINDOWS_SIGNING_DETAILS_ZH}}')
-    expect(notes).not.toContain('Windows x64: Authenticode-signed')
-  })
-
-  it('publishes only after verified Windows and explicit four-asset manifest verification', () => {
-    expect(workflow).toContain('needs: [verify-release-tag, build]')
-    expect(workflow).toContain('desktop-macos-arm64')
-    expect(workflow).toContain('desktop-windows-x64')
-    expect(workflow).toContain('scripts/release-assets.ts sync')
-    expect(workflow).not.toContain('--clobber')
-  })
-
-  it('verifies the built DMG and sends both immutable provenance refs to release notes', () => {
-    expect(workflow).toContain('scripts/verify-mac-dmg.ts dist/DeepSeek-Desktop-*-mac-arm64.dmg')
-    expect(workflow).toContain('APPLICATION_SOURCE_COMMIT: ${{ needs.verify-release-tag.outputs.release_commit }}')
-    expect(workflow).toContain('RELEASE_TOOLING_COMMIT: ${{ needs.verify-release-tag.outputs.release_tooling_commit }}')
-    expect(workflow).toContain('--application-source-commit "$APPLICATION_SOURCE_COMMIT"')
-    expect(workflow).toContain('--release-tooling-commit "$RELEASE_TOOLING_COMMIT"')
-    expect(workflow).not.toContain('GITHUB_SHA')
+    expect(workflow).toContain('ref: ${{ needs.verify-release-tag.outputs.release_tag }}')
+    expect(workflow).not.toContain('Overlay recovery')
+    expect(workflow).toContain('RELEASE_TOOLING_COMMIT: ${{ needs.verify-release-tag.outputs.release_commit }}')
     expect(notes).toContain('Application source commit: `{{APPLICATION_SOURCE_COMMIT}}`')
     expect(notes).toContain('Release tooling commit: `{{RELEASE_TOOLING_COMMIT}}`')
-    expect(notes).toContain('Gatekeeper')
-    expect(notes).toContain('Gatekeeper 提示')
   })
 
-  it('installs tsx dependencies before the release synchronizer without widening token scope', () => {
+  it('verifies both installed and packaged runtime pins before uploading artifacts', () => {
+    const installed = workflow.indexOf('Verify installed Electron matches')
+    const build = workflow.indexOf('- name: Build macOS distributables')
+    const packaged = workflow.indexOf('Verify packaged Electron matches')
+    const upload = workflow.indexOf('uses: actions/upload-artifact@v4')
+    expect(installed).toBeGreaterThanOrEqual(0)
+    expect(build).toBeGreaterThan(installed)
+    expect(packaged).toBeGreaterThan(build)
+    expect(upload).toBeGreaterThan(packaged)
+    expect(workflow).toContain('scripts/verify-electron-runtime.ts "dist/mac-arm64/DeepSeek Desktop.app/Contents/MacOS/DeepSeek Desktop"')
+  })
+
+  it('publishes only the validated Mac platform and verifies the DMG contents', () => {
+    expect(workflow).toContain('needs: [verify-release-tag, build]')
+    expect(workflow).toContain('--platforms mac-arm64')
+    expect(workflow).toContain('--mac dmg zip --arm64')
+    expect(workflow).toContain('scripts/verify-mac-dmg.ts dist/DeepSeek-Desktop-*-mac-arm64.dmg')
+    expect(workflow).not.toContain('desktop-windows-x64')
+    expect(workflow).not.toContain('windows-release-build.ts')
+    expect(workflow).not.toContain('--clobber')
+    expect(notes).toContain('{{ELECTRON_VERSION}}')
+    expect(notes).toContain('{{WINDOWS_SIGNING_DETAILS}}')
+    expect(notes).toContain('Gatekeeper')
+  })
+
+  it('installs release-script dependencies without widening mutation token scope', () => {
     const releaseJob = workflow.slice(workflow.indexOf('\n  release:'))
-    const dependencySetup = releaseJob.indexOf('uses: pnpm/action-setup@v4')
-    const frozenInstall = releaseJob.indexOf('pnpm install --frozen-lockfile')
-    const synchronize = releaseJob.indexOf('scripts/release-assets.ts sync')
-    expect(dependencySetup).toBeGreaterThanOrEqual(0)
-    expect(frozenInstall).toBeGreaterThan(dependencySetup)
-    expect(synchronize).toBeGreaterThan(frozenInstall)
+    expect(releaseJob.indexOf('pnpm install --frozen-lockfile')).toBeLessThan(releaseJob.indexOf('scripts/release-assets.ts sync'))
     expect(releaseJob.match(/GH_TOKEN:/gu)).toHaveLength(1)
-    const tokenStep = releaseJob.slice(releaseJob.lastIndexOf('- name: Create draft'))
-    expect(tokenStep).toContain('GH_TOKEN: ${{ github.token }}')
     expect(releaseJob.slice(0, releaseJob.lastIndexOf('- name: Create draft'))).not.toContain('GH_TOKEN:')
+    expect(workflow).toContain('contents: read')
   })
 })

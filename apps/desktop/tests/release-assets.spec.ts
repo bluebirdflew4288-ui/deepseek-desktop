@@ -83,6 +83,12 @@ describe('desktop release asset manifests', () => {
     expect(() => planAssetSync([asset], [], new Map(), false)).toThrow('Published Release is missing')
   })
 
+  it('rejects Windows assets outside a declared Mac release', () => {
+    const asset: ReleaseAsset = { name: 'app.dmg', path: 'app.dmg', sha256: 'abc', platform: 'mac-arm64' }
+    expect(() => planAssetSync([asset], [{ name: 'app.exe' }], new Map(), true))
+      .toThrow('undeclared asset: app.exe')
+  })
+
   it('renders truthful signed and unsigned Windows release notes', () => {
     expect(windowsSigningReleaseNotes('unsigned')).toEqual({
       en: 'Unsigned / NotSigned. The Windows x64 installer and application executable are not Authenticode-signed. Windows Defender SmartScreen may display an "Unknown publisher" or "Windows protected your PC" warning. This is a publisher/reputation warning, not a malware detection, and Windows Defender will not necessarily block the application. Download only from this repository\'s official GitHub Release and verify the SHA-256 hashes below.',
@@ -100,7 +106,7 @@ describe('desktop release asset manifests', () => {
     expect(findReleaseByTag([], 'v1.0.5')).toBeUndefined()
   })
 
-  it('uses the create response while a new draft is still invisible to release lookups', async () => {
+  it.each([{ platforms: ['mac-arm64'] }, { platforms: ['mac-arm64', 'win-x64'] }])('publishes exactly the declared platforms while a new draft is invisible: $platforms', async ({ platforms }) => {
     const root = tempRoot()
     const artifactsRoot = join(root, 'artifacts')
     const uploadedPaths = new Map<string, string>()
@@ -112,6 +118,7 @@ describe('desktop release asset manifests', () => {
     const toolingCommit = 'b'.repeat(40)
 
     for (const [platform, directory] of [['mac-arm64', 'mac'], ['win-x64', 'win']] as const) {
+      if (!platforms.includes(platform)) continue
       const platformRoot = join(artifactsRoot, directory)
       const dist = join(platformRoot, 'dist')
       mkdirSync(dist, { recursive: true })
@@ -128,7 +135,7 @@ describe('desktop release asset manifests', () => {
         assets: names,
       })}\n`)
     }
-    writeFileSync(join(artifactsRoot, 'win', 'windows-signing-manifest.json'), `${JSON.stringify({
+    if (platforms.includes('win-x64')) writeFileSync(join(artifactsRoot, 'win', 'windows-signing-manifest.json'), `${JSON.stringify({
       schemaVersion: 1,
       platform: 'win-x64',
       version: '1.0.6',
@@ -188,6 +195,7 @@ describe('desktop release asset manifests', () => {
 
     await syncDesktopRelease(new Map([
       ['tag', tag],
+      ['platforms', platforms.join(',')],
       ['repo', 'bluebirdflew4288-ui/deepseek-desktop'],
       ['artifacts-root', artifactsRoot],
       ['notes-template', notesTemplatePath],
@@ -198,12 +206,16 @@ describe('desktop release asset manifests', () => {
     expect(events[0]).toBe('lookup')
     expect(events[1]).toBe('create')
     expect(events.filter(event => event === 'lookup')).toHaveLength(2)
-    expect(events.filter(event => event.startsWith('upload:'))).toHaveLength(4)
+    expect(events.filter(event => event.startsWith('upload:'))).toHaveLength(platforms.length * 2)
     expect(events.at(-2)).toBe('publish')
     expect(events.at(-1)).toBe('lookup')
     expect(release).toMatchObject({ tag_name: tag, draft: false, prerelease: false })
     expect(release.body).toContain(`Release tooling commit: \`${toolingCommit}\``)
-    expect(remoteAssets).toHaveLength(4)
+    expect(remoteAssets).toHaveLength(platforms.length * 2)
+    if (!platforms.includes('win-x64')) {
+      expect(remoteAssets.every(asset => asset.name.includes('-mac-arm64.'))).toBe(true)
+      expect(release.body).toContain('Not published; Windows update functionality')
+    }
   })
 
   it('only reuses drafts with release provenance and matching signing disclosure', () => {
@@ -237,11 +249,12 @@ describe('desktop release asset manifests', () => {
       'bb7e18bbe632507e51822f11c2ee77e6297e1199',
       '- artifact: SHA-256 `abc`',
       { en: 'unsigned', zh: '未签名' },
+      '44.0.0',
     )
     expect(notes).toContain('Application source commit: `8cdad7930310893150976929758b29975877fb28`')
     expect(notes).toContain('Release tooling commit: `bb7e18bbe632507e51822f11c2ee77e6297e1199`')
     expect(notes).toContain('未签名')
-    expect(() => renderDesktopReleaseNotes('template', '1.0.6', 'GITHUB_SHA', 'a'.repeat(40), '', { en: '', zh: '' }))
+    expect(() => renderDesktopReleaseNotes('template', '1.0.6', 'GITHUB_SHA', 'a'.repeat(40), '', { en: '', zh: '' }, '44.0.0'))
       .toThrow('Invalid application source commit identity')
   })
 })
