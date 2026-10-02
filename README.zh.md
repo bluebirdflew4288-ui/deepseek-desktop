@@ -6,6 +6,12 @@
 
 **非官方项目。** 本项目是社区维护的非官方 DeepSeek Desktop 项目，与 DeepSeek AI 无官方隶属、授权、赞助或背书关系，并非 DeepSeek AI 官方产品。本项目基于 DeepSeek 及社区开源组件继续开发与整合。相关商标、上游项目名称及版权归各自权利人所有。开源许可证允许按其条款使用代码，不代表官方合作或认可。
 
+## 下载
+
+[macOS Apple Silicon — DMG（推荐）](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.zip) · [所有版本](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
+
+Desktop v1.0.7。macOS 安装包使用 ad hoc 签名，未公证；DMG 内附安装与首次打开说明。Windows x64 下载与签名状态见 [Release 页面](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/tag/v1.0.7)。
+
 ## 预览
 
 ### Chat
@@ -69,7 +75,7 @@ Harness 提供官方 WebUI 以及工作区、智能体和工具能力。请独�
 
 ## 安装
 
-人工验收覆盖 macOS Apple Silicon 开发构建。本衍生项目尚无公开稳定版本。发布工作流要求可信的 Windows x64 Authenticode 证书；只有安装程序与应用可执行文件均通过证书链校验、配置的完整证书 Subject 精确匹配且带有可信 RFC 3161 时间戳时才会继续。目前没有配置 Windows 签名凭据，因此发布会安全失败。macOS 发布产物仅使用 ad hoc 签名；未使用 Developer ID 分发签名，也未公证。用户已接受此前安装的未签名 Windows x64 1.0.5 本地试用构建（含原生菜单、托盘行为与通知）；该验收仅适用于那个已安装版本。最新源码通过 `pnpm run build`。2026-09-24 的两次独立打包预检都在 `resEdit` 写入时遇到 `EBUSY`；将 Windows npm 执行移出 `afterPack` 后，2026-09-25 的完整 Windows x64 NSIS/ZIP 构建及打包后 npm 运行时验证均通过。生成的安装程序与应用可执行文件均为 `NotSigned`：当前没有可信签名证书，也没有正式签名或 GitHub Release。当前源码包尚未安装，其应用启动、Harness 与 Chat 均未验证。Linux Desktop 安装包不是当前发布目标。
+通过上方链接下载打包应用。在 macOS Apple Silicon 上打开 DMG，将 DeepSeek Desktop 拖入“应用程序”。DMG 内含 `安装指南.txt`，说明首次打开时可能出现的 Gatekeeper 提示；应用仅使用 ad hoc 签名，未使用 Developer ID 分发签名，也未公证。Windows x64 EXE 与 ZIP 未签名（`NotSigned`），SmartScreen 可能显示发布者警告。请将下载文件的 SHA-256 与 Release 中的校验值核对。Linux Desktop 安装包不是当前发布目标。
 
 ### 打包应用用户
 

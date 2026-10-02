@@ -6,6 +6,12 @@ An integrated community desktop experience for official DeepSeek Chat, local Cha
 
 **Unofficial project.** This is an unofficial, community-maintained DeepSeek Desktop project. It is not affiliated with, endorsed by, sponsored by, or an official product of DeepSeek AI. It builds upon open-source components from DeepSeek and the broader community. All trademarks, upstream project names, and copyrights remain the property of their respective owners. Open-source licenses permit use under their terms; they do not imply an official partnership or endorsement.
 
+## Download
+
+[macOS Apple Silicon — DMG (recommended)](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.dmg) · [macOS ZIP](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/download/v1.0.7/DeepSeek-Desktop-1.0.7-mac-arm64.zip) · [All releases](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases)
+
+Desktop v1.0.7. macOS packages are ad hoc signed and not notarized; installation and first-launch guidance is included in the DMG. Windows x64 downloads and their signing status are listed on the [Release page](https://github.com/bluebirdflew4288-ui/deepseek-desktop/releases/tag/v1.0.7).
+
 ## Preview
 
 ### Chat
@@ -69,7 +75,7 @@ Recovery handles interrupted program transactions. Harness rollback currently re
 
 ## Installation
 
-Human acceptance covers the macOS Apple Silicon development build. There is no stable public release of this derivative yet. The release workflow requires a trusted Windows x64 Authenticode certificate and blocks unless both the installer and application executable have a valid chain, the configured full certificate Subject matches exactly, and a trusted RFC 3161 timestamp is present. Those Windows signing credentials are not configured, so a release currently fails closed. macOS release artifacts use an ad hoc signature only; they are not Developer ID signed or notarized. The user accepted the earlier unsigned Windows x64 1.0.5 local trial build, including its native menus, tray behavior, and notifications; that acceptance applies only to that installed build. The latest source passed `pnpm run build`. Two isolated packaging preflights on 2026-09-24 failed in `resEdit` with `EBUSY`; after moving Windows npm execution out of `afterPack`, a full Windows x64 NSIS/ZIP build and packaged npm-runtime verification passed on 2026-09-25. The resulting installer and application executable are `NotSigned`: there is no trusted signing certificate, formal signature, or GitHub Release. The current source package has not been installed, and its application startup, Harness, and Chat have not been verified. Linux Desktop packages are not a current release target.
+Download the packaged app from the links above. On macOS Apple Silicon, open the DMG and drag DeepSeek Desktop into Applications. The DMG includes `安装指南.txt` for first-launch Gatekeeper prompts; the app has an ad hoc signature, with no Developer ID distribution signature or notarization. The Windows x64 EXE and ZIP are unsigned (`NotSigned`); SmartScreen may show a publisher warning. Check the Release's SHA-256 hashes against your download. Linux Desktop packages are not a current release target.
 
 ### Packaged users
 
