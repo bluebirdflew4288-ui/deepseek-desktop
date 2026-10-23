@@ -15,6 +15,7 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  net,
   session,
   shell,
   Tray,
@@ -121,7 +122,15 @@ function createManagedHarness(hostEnvironment: () => NodeJS.ProcessEnv): Managed
     cwd,
     electronRunAsNode: true,
     hostEnvironment,
-    releaseSource: createHarnessReleaseSource(),
+    // Prefer Chromium networking for release metadata: unlike Node fetch, it
+    // honors the macOS/Windows system proxy used by Desktop's embedded views.
+    // The release source always passes a string URL for the pinned npm registry.
+    releaseSource: createHarnessReleaseSource({
+      fetchImpl: (input, init) => {
+        if (typeof input !== 'string') throw new TypeError('Harness registry fetch requires a URL string')
+        return net.fetch(input, init)
+      },
+    }),
     installer: createNpmHarnessInstaller({
       layout,
       nodeExecutable,
