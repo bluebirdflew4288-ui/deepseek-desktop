@@ -253,6 +253,7 @@ class SingleExeBuild {
       'deploy',
       '--legacy',
       '--prod',
+      '--config.allow-unused-patches=true',
       '--config.node-linker=hoisted',
       '--config.auto-install-peers=false',
       '--config.link-workspace-packages=true',
@@ -263,6 +264,13 @@ class SingleExeBuild {
     if (this.cli.dryRun) {
       for (const name of DEPLOY_ONLY_DOCS) console.log(`build-exe-for-python-sdk: [dry-run] rm -f ${join(this.staging, name)}`)
     } else {
+      // Legacy deploy carries the workspace patches into the production subset.
+      // Electron's patch can be unused here, but the PTY helper lookup is required.
+      const terminal = await readFile(join(this.staging, 'node_modules', 'node-pty', 'lib', 'unixTerminal.js'), 'utf8')
+      if (!terminal.includes('process.env.DSH_NODE_PTY_SPAWN_HELPER') ||
+        !terminal.includes("process.execPath + '-spawn-helper'")) {
+        throw new Error('build-exe-for-python-sdk: staged node-pty is missing the spawn-helper patch.')
+      }
       await Promise.all(DEPLOY_ONLY_DOCS.map(name => rm(join(this.staging, name), { force: true })))
     }
   }
