@@ -1,0 +1,62 @@
+name: Koffi native compatibility
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/koffi-native.yml
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/fs/fs-local/**
+      - packages/host/directory-picker-native/**
+      - packages/sandbox/sandbox-windows-acl/**
+      - packages/session/session-persistence-jsonl/**
+
+permissions:
+  contents: read
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  windows:
+    name: Windows x64 Koffi consumer checks
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install from lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Exercise four native consumers
+        run: |
+          $testNames = @(
+            'protects staged content with the existing target DACL and preserves it after replacement'
+            'creates and configures a real COM folder dialog'
+            'grantWrite merges into the current DACL: an explicit Users ACE survives grant+revoke'
+            'lazy materialization: create() writes no file until the first append'
+          )
+          $testPattern = ($testNames | ForEach-Object { [Regex]::Escape($_) }) -join '|'
+          $report = Join-Path $env:RUNNER_TEMP 'koffi-native.json'
+          $testFiles = @(
+            'packages/fs/fs-local/tests/fsio.spec.ts'
+            'packages/host/directory-picker-native/tests/win32-dialog.spec.ts'
+            'packages/sandbox/sandbox-windows-acl/tests/acl.spec.ts'
+            'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts'
+          )
+          pnpm exec vitest run @testFiles -t $testPattern --reporter=verbose --reporter=json "--outputFile.json=$report"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $results = (Get-Content -Raw $report | ConvertFrom-Json).testResults.assertionResults
+          foreach ($testName in $testNames) {
+            $matching = @($results | Where-Object { $_.title -ceq $testName -and $_.status -eq 'passed' })
+            if ($matching.Count -ne 1) { throw "Native test did not pass exactly once: $testName" }
+          }
