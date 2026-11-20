@@ -36,6 +36,8 @@ jobs:
           cache: pnpm
       - name: Install from lockfile
         run: pnpm install --frozen-lockfile
+      - name: Build the host dependencies used by JSONL tests
+        run: pnpm run build:lib:host
       - name: Exercise four native consumers
         run: |
           $testNames = @(
@@ -52,11 +54,12 @@ jobs:
             'packages/sandbox/sandbox-windows-acl/tests/acl.spec.ts'
             'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts'
           )
-          pnpm exec vitest run @testFiles -t $testPattern --reporter=verbose --reporter=json "--outputFile.json=$report"
+          pnpm exec vitest run @testFiles -t $testPattern --reporter=default --reporter=json "--outputFile.json=$report"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $results = (Get-Content -Raw $report | ConvertFrom-Json).testResults.assertionResults
+          $results = (Get-Content -Raw $report | ConvertFrom-Json).testResults | ForEach-Object { $_.assertionResults }
           foreach ($testName in $testNames) {
             $matching = @($results | Where-Object { $_.title -ceq $testName -and $_.status -eq 'passed' })
             if ($matching.Count -ne 1) { throw "Native test did not pass exactly once: $testName" }
+            Write-Output "PASS $testName"
           }
