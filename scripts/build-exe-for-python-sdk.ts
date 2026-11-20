@@ -393,6 +393,7 @@ class SingleExeBuild {
     if (!this.cli.dryRun) await mkdir(this.outDir, { recursive: true })
     await this.run(`pkg ${target.spec}`, pnpmBin(), [
       'dlx',
+      '--allow-build=esbuild',
       PKG_SPEC,
       this.staging,
       '--sea',
