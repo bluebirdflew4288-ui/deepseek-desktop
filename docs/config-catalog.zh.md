@@ -407,6 +407,14 @@ export interface ConnectionConfig {
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Per-launch bearer credential every `/api` request must carry. Leave it
+   * unset for a standalone `dsh web`, whose browser client has no channel to
+   * receive one. The desktop shell generates a credential per launch and
+   * attaches it in its own request layer, so it never reaches renderer
+   * JavaScript, disk, or a URL.
+   */
+  apiToken?: string
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }
@@ -1511,8 +1519,10 @@ export interface Config {
   /** File-sandbox mode a session starts from (default: `read-only`). */
   mode?: SandboxMode
   /**
-   * Fallback root for agentless calls and sessions without a cwd (default:
-   * `process.cwd()`). Normal agent calls use their session cwd instead.
+   * Fallback root reported for agentless calls and sessions without a cwd
+   * (default: `process.cwd()`). It is never a write grant: with no session cwd
+   * a `workspace-write` policy degrades to `read-only`, which admits no
+   * writable root at all. Normal agent calls use their session cwd instead.
    */
   workspaceRoot?: string
 }
