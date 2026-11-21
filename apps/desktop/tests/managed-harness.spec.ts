@@ -1216,7 +1216,7 @@ describe('managed runtime final safety regressions', () => {
     await context.runtime.recover()
     expect(await readFile(join(root, 'replacement-backup', 'retained-marker'), 'utf8')).toBe('original')
     expect(context.runtime.launch()).toBeUndefined()
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toEqual({ operation: 'reinstall', version: '0.1.5-rc.1' })
+    expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toEqual({ operation: 'reinstall', version: '0.1.5-rc.1' })
   }, 10_000)
 
   it('restores only a transaction-identified backup after a promoted-but-uncommitted crash', async () => {
@@ -1242,7 +1242,7 @@ describe('managed runtime final safety regressions', () => {
     await expect(readFile(join(target, 'retained-marker'), 'utf8')).resolves.toBe('original')
     await expect(readdir(backup)).rejects.toThrow()
     expect(context.runtime.launch()?.version).toBe(version)
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+    expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toBeUndefined()
   }, 10_000)
 
   it.each(['staging', 'health'] as const)(
@@ -1267,14 +1267,14 @@ describe('managed runtime final safety regressions', () => {
       expect(context.runtime.launch()?.version).toBe(version)
       expect(context.runtime.availability()).toEqual({ available: true })
       expect(context.runtime.status()).toMatchObject({ phase: 'failed', reason: /scratch data.*recovery is deferred/iu })
-      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ transactionId, phase: 'committed' })
+      expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toMatchObject({ transactionId, phase: 'committed' })
       await expect(readFile(join(scratchPath, marker), 'utf8')).resolves.toContain('99999999')
 
       await writeFile(join(scratchPath, marker), JSON.stringify({ transactionId }))
       await context.runtime.recover()
 
       expect(context.runtime.launch()?.version).toBe(version)
-      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+      expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toBeUndefined()
       await expect(readdir(scratchPath)).rejects.toThrow()
     },
   )
@@ -1296,7 +1296,7 @@ describe('managed runtime final safety regressions', () => {
 
     expect(context.runtime.status()).toEqual({ phase: 'ready', current: version })
     expect(context.runtime.launch()?.version).toBe(version)
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+    expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toBeUndefined()
     await expect(readdir(staging)).rejects.toThrow()
   }, 10_000)
 
@@ -1325,7 +1325,7 @@ describe('managed runtime final safety regressions', () => {
       expect(context.runtime.launch()).toBeUndefined()
       expect(context.runtime.availability()).toEqual({ available: false, reason: 'not-installed' })
       expect(context.runtime.status()).toMatchObject({ phase: 'failed', reason: /previous install/iu })
-      expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ transactionId: txId, phase })
+      expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toMatchObject({ transactionId: txId, phase })
       if (phase === 'promoted') await expect(readFile(join(target, '.dsh-desktop-managed.json'), 'utf8')).resolves.toContain(txId)
     },
   )
@@ -1341,7 +1341,7 @@ describe('managed runtime final safety regressions', () => {
     const layout = managedHarnessLayout(root)
     expect(context.runtime.launch()).toBeUndefined()
     expect(context.runtime.availability()).toEqual({ available: false, reason: 'not-installed' })
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toMatchObject({ phase: 'backed-up' })
+    expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toMatchObject({ phase: 'backed-up' })
     await expect(readdir(layout.backups).then(entries => entries.length)).resolves.toBe(0)
   })
 
@@ -1355,7 +1355,7 @@ describe('managed runtime final safety regressions', () => {
     await expect(context.runtime.install()).resolves.toMatchObject({ outcome: 'failed' })
 
     await expect(readFile(join(target, 'human-backup.txt'), 'utf8')).resolves.toBe('keep')
-    expect(JSON.parse(await readFile(layout.stateFile, 'utf8')).pending).toBeUndefined()
+    expect((JSON.parse(await readFile(layout.stateFile, 'utf8')) as { pending?: unknown }).pending).toBeUndefined()
   })
 
   it('keeps a legacy current install launchable when same-version reinstall lacks ownership proof', async () => {
@@ -1366,7 +1366,7 @@ describe('managed runtime final safety regressions', () => {
     await rm(join(layout.versionDirectory('0.1.5-rc.1'), '.dsh-desktop-managed.json'))
 
     await expect(context.runtime.reinstall()).resolves.toMatchObject({
-      outcome: 'failed', reason: expect.stringMatching(/no trusted ownership marker/iu),
+      outcome: 'failed', reason: expect.stringMatching(/no trusted ownership marker/iu) as unknown,
     })
     expect(context.runtime.launch()?.version).toBe('0.1.5-rc.1')
 

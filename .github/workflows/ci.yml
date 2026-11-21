@@ -172,8 +172,23 @@ jobs:
           if (( install_status != 0 )); then exit "$install_status"; fi
           exit "$sandbox_status"
 
+      # The coverage aggregate runs every unit suite plus the Desktop Electron
+      # fixtures, so it needs the same compiled tree the consumer lane builds:
+      # workspace/Desktop lib output, the pinned npm runtime staged by
+      # `stage:npm`, and a materialized Electron binary. Building first does not
+      # shift measurement off source — the tsconfig paths map still wins over
+      # package exports, so `coverage.include` keeps measuring `packages/*/src`.
+      - name: Build workspace and stage the Desktop runtime
+        run: |
+          pnpm run build
+          pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
+          pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
+
+      - name: Install xvfb for the Electron fixtures
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+
       - name: Run exhaustive coverage
-        run: pnpm run check:ci:coverage
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" pnpm run check:ci:coverage
 
   node-24-consumers:
     if: github.event_name == 'pull_request'
