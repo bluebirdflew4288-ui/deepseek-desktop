@@ -149,15 +149,15 @@ describe('Windows release signing gate', () => {
   })
 
   it('accepts only explicit NotSigned evidence for the unsigned path', () => {
-    expect(() => assertUnsignedAuthenticodeEvidence({
+    expect(() => { assertUnsignedAuthenticodeEvidence({
       status: 'NotSigned',
       signerSubject: null,
       timestampSubject: null,
       timestampEkus: [],
       trustedChain: false,
       signtoolSucceeded: false,
-    })).not.toThrow()
-    expect(() => assertUnsignedAuthenticodeEvidence({ ...VALID_EVIDENCE, status: 'Valid' }))
+    }) }).not.toThrow()
+    expect(() => { assertUnsignedAuthenticodeEvidence({ ...VALID_EVIDENCE, status: 'Valid' }) })
       .toThrow('must be NotSigned')
   })
 

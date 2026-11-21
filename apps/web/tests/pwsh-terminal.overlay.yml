@@ -1,20 +1,19 @@
 # The pwsh terminal-card lane swaps the shipped bash stack for the PowerShell
-# twin: the bash executor row is disabled (patches cannot rename a row — `name`
-# is a guard) and the pwsh executor + tool are inserted. The permission service
-# refuses an unconfined executor by design (presets bundle a sandbox mode), so
-# its row is disabled too — this lane renders a seeded session, never a
-# permission decision. The seeded scenario renders the logged pwsh call/result
-# through the real tools on replay; no command executes, but the composition
-# must boot the pwsh executor, so the lane skips on hosts without a usable
-# `pwsh`.
+# twin. The base patch already declares both shell stacks — `bash-sandbox` /
+# `tool-bash` (disabled on win32) and `pwsh-sandbox` / `tool-pwsh` (disabled off
+# win32) — so this overlay PATCHES those existing rows instead of inserting new
+# ones. Inserting another `tool-pwsh` row duplicated the loader entry id, and an
+# extra executor row would double-register the `bash` service. Disable the bash
+# executor + tool and enable the pwsh executor + tool; the permission service is
+# disabled because an unconfined pwsh executor is refused by design and this lane
+# only replays a seeded session.
 - id: bash-sandbox
-  name: '@deepseek-ai/dsh-bash-sandbox'
   disabled: true
+- id: pwsh-sandbox
+  disabled: false
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: false
 - id: permission
-  name: '@deepseek-ai/dsh-permission-presets'
   disabled: true
-- insert:
-    - id: pwsh-local
-      name: '@deepseek-ai/dsh-pwsh-local'
-    - id: tool-pwsh
-      name: '@deepseek-ai/dsh-tool-pwsh'

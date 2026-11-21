@@ -246,8 +246,10 @@ describe('Chat completion notifications', () => {
       await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
 
       // Background regeneration alerts, and the ledger still holds one receipt each.
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      // Switch to Harness while the window is still visible, then hide it: a
+      // hidden BrowserWindow has no stable/visible target for a synthetic click.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
+      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
       await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
       // A second unseen regeneration raises the Dock number to two.

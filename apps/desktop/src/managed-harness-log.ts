@@ -168,7 +168,7 @@ export function createManagedHarnessDiagnostics(options: ManagedHarnessDiagnosti
       await ensureSafeDirectoryTree(dirname(options.file), trustedAnchor)
       await assertSafeRegularFile(options.file, trustedAnchor, true)
       await assertSafeRegularFile(backup, trustedAnchor, true)
-      const size = await lstat(options.file).then(metadata => metadata.size, (error) => {
+      const size = await lstat(options.file).then(metadata => metadata.size, (error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
         throw error
       })

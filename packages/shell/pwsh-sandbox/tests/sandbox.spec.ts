@@ -16,6 +16,7 @@ import { SandboxProvider, SandboxUnavailableError } from '@deepseek-ai/dsh-sandb
 import type { ConfinedArgv, RunnerFailureRule, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import type { Session } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { SandboxPwshExecutor } from '../src/index.ts'
 import { classifyRunnerFailure, isRunnerSpawnFailure, matchesSignature } from '../src/helpers.ts'
@@ -55,7 +56,7 @@ function throwingSubprocessRuntime(error: unknown): new (ctx: Context) => Servic
 async function setup(
   behavior: (argv: readonly string[], policy: SandboxPolicy) => ConfinedArgv = passthrough,
   subprocess: new (ctx: Context) => Service = LocalSubprocessRuntime,
-): Promise<{ executor: SandboxPwshExecutor; calls: ConfineCall[] }> {
+): Promise<{ executor: SandboxPwshExecutor; calls: ConfineCall[]; ctx: Context }> {
   const calls: ConfineCall[] = []
   class FakeSandboxProvider extends SandboxProvider {
     confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
@@ -71,7 +72,7 @@ async function setup(
     ctx.subprocess.internals = { spillDir }
   }
   await ctx.plugin(SandboxPwshExecutor, { graceMs: 200 })
-  return { executor: ctx.shell as SandboxPwshExecutor, calls }
+  return { executor: ctx.shell as SandboxPwshExecutor, calls, ctx }
 }
 
 describe('helpers (pure)', () => {
@@ -181,12 +182,24 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     expect(result.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full' })
   }, 30_000)
 
-  it('advertises the deployment default mode and stamps the deployment policy when none rides the request', async () => {
+  it('advertises the deployment default mode but degrades a session-less call to read-only', async () => {
     const { executor, calls } = await setup()
     expect(executor.sandboxMode).toBe('workspace-write')
     const result = await executor.run(executor.resolve({ command: 'echo fallback' }))
     expect(result.exitCode).toBe(0)
-    expect(calls[0]?.policy.mode).toBe('workspace-write')
+    // No session cwd rides the request, so the workspace-write deployment default
+    // degrades to read-only: no session cwd must never become a write grant.
+    expect(calls[0]?.policy.mode).toBe('read-only')
+  }, 30_000)
+
+  it('grants workspace-write only when a session cwd inside the workspace resolves', async () => {
+    const { ctx } = await setup()
+    const policy = ctx.sandboxPolicy
+    // Session-less requests degrade; a session's own immutable cwd grants it.
+    expect(policy.resolve().mode).toBe('read-only')
+    const session = { id: 'session-1', header: { cwd: spillDir }, events: [] } as unknown as Session
+    const resolved = policy.resolve({ session })
+    expect(resolved.mode).toBe('workspace-write')
   }, 30_000)
 
   it('danger-full-access bypasses confine entirely and stamps full-access facts', async () => {
