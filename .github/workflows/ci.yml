@@ -499,6 +499,18 @@ jobs:
         shell: pwsh
         run: pnpm install --frozen-lockfile
 
+      # The complete inventory schedules coverage and the Desktop fixtures beside
+      # the build gate, but those gates need built `lib/`, the staged
+      # `runtime-npm`, and a materialized Electron binary before they start.
+      # Pre-build so the concurrent coverage gate resolves vendor/package entries
+      # and the Desktop fixtures find their artifacts.
+      - name: Build workspace and stage the Desktop runtime
+        shell: pwsh
+        run: |
+          pnpm run build
+          pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
+          pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
+
       - name: Run complete native Windows gate inventory
         shell: pwsh
         run: pnpm run check:ci:windows-complete
