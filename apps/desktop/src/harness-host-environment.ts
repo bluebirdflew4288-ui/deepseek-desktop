@@ -33,7 +33,7 @@ export function isHarnessStartupVariable(name: string): boolean {
  * @param platform - Target operating system.
  * @returns PATH, or an empty string when absent.
  */
-export function developmentSearchPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+function developmentSearchPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
   if (platform !== 'win32') return environment.PATH ?? ''
   return Object.entries(environment).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? ''
 }

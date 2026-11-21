@@ -4,7 +4,7 @@
 export type DesktopColorScheme = 'light' | 'dark'
 
 /** Theme preferences synchronized between the two desktop modes. */
-export const DESKTOP_THEME_PREFERENCES = ['light', 'dark', 'system'] as const
+const DESKTOP_THEME_PREFERENCES = ['light', 'dark', 'system'] as const
 
 /** User-selected desktop theme preference before resolving the operating system. */
 export type DesktopThemePreference = typeof DESKTOP_THEME_PREFERENCES[number]

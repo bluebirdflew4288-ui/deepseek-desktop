@@ -14,7 +14,7 @@ function assertContained(path: string, anchor: string): { path: string; anchor: 
 }
 
 /** Check the directory chain from an existing trusted anchor without creating it. */
-export async function assertSafeDirectoryTree(path: string, anchor: string): Promise<void> {
+async function assertSafeDirectoryTree(path: string, anchor: string): Promise<void> {
   const checked = assertContained(path, anchor)
   const chain: string[] = []
   let current = checked.path
