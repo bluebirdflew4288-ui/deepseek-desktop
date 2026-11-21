@@ -6,6 +6,7 @@ import { _electron, type ElectronApplication, type Page } from 'playwright'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/desktop-notifications.ts'
+import { desktopTitlebarDragStart } from '../src/desktop-chrome-layout.ts'
 import { assertFixtureImportsResolve } from './electron-fixture-artifacts.ts'
 
 interface FixtureState {
@@ -436,7 +437,10 @@ describe('desktop dual-mode Electron application', () => {
       expect(switchBox).not.toBeNull()
       expect(switchBox).toMatchObject({ x: 0, y: 0, width: 164, height: 32 })
       expect(dragBox).not.toBeNull()
-      expect(dragBox?.x).toBe(300)
+      // The first draggable x depends on the host's native title-bar controls:
+      // darwin/win32 leave room for traffic lights / system buttons (300), while
+      // Linux has no native left controls (224). Use the owning layout function.
+      expect(dragBox?.x).toBe(desktopTitlebarDragStart(process.platform))
       expect(await chrome.locator('.mode-mark').count()).toBe(0)
       expect(await chrome.locator('#mode-switch').evaluate((element) => {
         const style = getComputedStyle(element)
