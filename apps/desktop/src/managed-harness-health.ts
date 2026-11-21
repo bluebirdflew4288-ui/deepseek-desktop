@@ -19,7 +19,7 @@ import { readFile, lstat } from 'node:fs/promises'
 const DEFAULT_HEALTH_READINESS_TIMEOUT_MS = 120_000
 
 /** One program directory to prove runnable. */
-export interface HarnessHealthRequest {
+interface HarnessHealthRequest {
   /** Installed program directory holding the Harness closure. */
   readonly versionDirectory: string
   /** Exact version, naming the disposable Harness home for this check. */
@@ -28,7 +28,7 @@ export interface HarnessHealthRequest {
 }
 
 /** Outcome of one health check. It never carries the launch token. */
-export type HarnessHealthResult =
+type HarnessHealthResult =
   | { readonly healthy: true }
   | { readonly healthy: false; readonly failure: string }
 

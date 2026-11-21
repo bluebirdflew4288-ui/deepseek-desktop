@@ -35,10 +35,10 @@ const HOST_PACKAGES = [
 ] as const
 
 /** Outcome of one health check. */
-export type ManagedHarnessHealth = 'pass' | 'fail'
+type ManagedHarnessHealth = 'pass' | 'fail'
 
 /** One recorded operation fact. Every field is named here, so nothing else can enter the log. */
-export interface ManagedHarnessLogEntry {
+interface ManagedHarnessLogEntry {
   /** ISO-8601 time the fact was recorded. */
   readonly time: string
   /** Operation the desktop performed. */

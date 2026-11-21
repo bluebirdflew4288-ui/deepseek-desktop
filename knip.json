@@ -5,23 +5,37 @@
   ],
   "ignoreBinaries": [
     "bwrap",
+    "gh",
     "icacls",
     "musl-gcc",
     "python3",
+    "pwsh.exe",
     "sandbox-exec",
+    "security",
     "tar",
     "taskkill",
     "where.exe"
   ],
   "ignoreWorkspaces": [
     "vendor/*",
-    "python/sdk-runtime"
+    "python/sdk-runtime",
+    "apps/desktop/runtime"
   ],
   "ignoreDependencies": [
     "@yarnpkg/cli-dist",
     "lightningcss"
   ],
   "workspaces": {
+    "apps/desktop": {
+      "entry": [
+        "resources/deepseek-memory/*.{js,d.ts}",
+        "scripts/stage-runtime.ts",
+        "src/main.ts",
+        "src/*-preload.ts",
+        "tests/fixtures/*/main.mjs",
+        "tests/fixtures/hybrid-environment.mjs"
+      ]
+    },
     ".": {
       "entry": [
         "scripts/**/*.mjs",

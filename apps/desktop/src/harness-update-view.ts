@@ -27,7 +27,7 @@ function assertNever(value: never): never {
 }
 
 /** Program versions retained once a transaction has settled. */
-export interface HarnessUpdateRetention {
+interface HarnessUpdateRetention {
   /** Version now promoted and launchable. */
   readonly current?: string
 }

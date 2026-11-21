@@ -72,7 +72,7 @@ const SEMVER_VERSION_PATTERN = new RegExp([
 const OWNERSHIP_PROBE_TIMEOUT_MS = 10_000
 
 /** What the shell needs to launch the managed Harness. */
-export interface ManagedHarnessLaunch {
+interface ManagedHarnessLaunch {
   /** Built CLI entry inside the promoted program directory. */
   readonly cliEntry: string
   /** Exact version the entry belongs to. */
@@ -86,7 +86,7 @@ export interface ManagedHarnessLaunch {
 }
 
 /** Whether the Harness surface can start, and why not when it cannot. */
-export type ManagedHarnessAvailability =
+type ManagedHarnessAvailability =
   | { readonly available: true }
   | { readonly available: false; readonly reason: 'not-installed' | 'invalid' | 'busy' }
 
@@ -123,7 +123,7 @@ export type ManagedHarnessUpdateCheck =
  * manager resolves, downloads, and writes in one child process that reports
  * nothing structured, so downloading is not a stage of its own.
  */
-export type ManagedHarnessTransactionStage = 'preparing' | 'installing' | 'verifying' | 'health'
+type ManagedHarnessTransactionStage = 'preparing' | 'installing' | 'verifying' | 'health'
 
 /**
  * One stage a staging transaction reached, as the shell reports it.
@@ -161,7 +161,7 @@ export type ManagedHarnessTransaction =
   | { readonly outcome: 'failed'; readonly reason: string }
 
 /** Process ownership the desktop records for one launch it owns. */
-export interface ManagedHarnessRuntimeRecord {
+interface ManagedHarnessRuntimeRecord {
   /** Process identifier of the Harness this launch started. */
   readonly pid: number
   /** Exact managed CLI entry that process was spawned with. */

@@ -14,7 +14,7 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { CHAT_PARTITION } from './chat-navigation.ts'
 
 export const DEEPSEEK_MEMORY_EXTENSION_ID = 'gnidildjjigkpideacmahnfagflchfpk'
-export const DEEPSEEK_MEMORY_HOST_PERMISSION = 'https://chat.deepseek.com/*'
+const DEEPSEEK_MEMORY_HOST_PERMISSION = 'https://chat.deepseek.com/*'
 const MAX_IMPORT_BYTES = 8 * 1024 * 1024
 
 const ALLOWED_MANIFEST_KEYS = new Set([

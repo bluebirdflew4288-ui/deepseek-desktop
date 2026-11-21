@@ -20,7 +20,7 @@ const AUDITED_FILES: Readonly<Record<string, string>> = {
  * @param cliEntry - Managed launch's absolute CLI entry, never a guessed user directory.
  * @returns Whether the read-only behavior matches the audited artifacts.
  */
-export async function supportsHarnessNotificationReads(cliEntry: string): Promise<boolean> {
+async function supportsHarnessNotificationReads(cliEntry: string): Promise<boolean> {
   const root = dirname(dirname(dirname(cliEntry)))
   try {
     const matches = await Promise.all(Object.entries(AUDITED_FILES).map(async ([relative, expected]) =>

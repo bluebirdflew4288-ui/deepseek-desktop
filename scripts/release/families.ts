@@ -20,7 +20,7 @@ const ORDER_SECTIONS = ['dependencies', 'optionalDependencies'] as const
 const WORKSPACE_ROOT_PACKAGE = '@deepseek-ai/dsh-root'
 
 /** App directories whose manifests belong to the dsh npm release family. */
-export const DSH_NPM_RELEASE_APP_DIRECTORIES = ['apps/cli', 'apps/web'] as const
+const DSH_NPM_RELEASE_APP_DIRECTORIES = ['apps/cli', 'apps/web'] as const
 
 const DSH_NPM_RELEASE_APP_DIRECTORY_SET: ReadonlySet<string> = new Set(DSH_NPM_RELEASE_APP_DIRECTORIES)
 

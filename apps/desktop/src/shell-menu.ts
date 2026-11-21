@@ -35,7 +35,7 @@ export type ShellSettingsAction =
   | { readonly kind: 'locale'; readonly locale: DesktopShellLocale }
 
 /** One radio choice inside a settings group. */
-export interface ShellSettingsChoice {
+interface ShellSettingsChoice {
   /** Label already rendered in the active shell locale. */
   readonly label: string
   /** Whether this choice is the current preference. */

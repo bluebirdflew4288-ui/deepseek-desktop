@@ -11,7 +11,7 @@ export type DesktopMode = 'chat' | 'harness'
  * `setup` is distinct from `failed`: nothing broke, a prerequisite the user has
  * to start is simply absent, so the surface offers that action instead of a retry.
  */
-export type DesktopModePhase = 'idle' | 'loading' | 'setup' | 'ready' | 'failed'
+type DesktopModePhase = 'idle' | 'loading' | 'setup' | 'ready' | 'failed'
 
 /** Current lifecycle state of one desktop mode surface. */
 export interface DesktopModeStatus {
