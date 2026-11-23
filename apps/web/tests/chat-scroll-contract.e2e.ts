@@ -251,15 +251,13 @@ function scrollGeometry(page: Page): Promise<ScrollGeometry> {
 }
 
 /**
- * Rendered transcript rows in the loaded window. The stats strip cannot serve
- * as this probe: its turn/step counts ride the whole-log sessionStats
- * projection and stay fixed across paging by design, while the row count is
- * exactly what grows when an older page prepends or a live turn streams in.
- * @param page - the scenario page.
- * @returns the number of mounted chat flow rows.
+ * Total scrollable extent of the transcript. Virtualization keeps the row count
+ * bounded, but the scroll content (real mounted rows plus size-estimating
+ * spacers) grows when an earlier history page actually loads, so this reflects
+ * loaded history data rather than the live DOM row count.
  */
-async function loadedFlowRows(page: Page): Promise<number> {
-  return page.locator('[data-chat-flow-key]').count()
+async function scrollContentExtent(page: Page): Promise<number> {
+  return page.locator('[data-conversation-scroll]').evaluate(element => element.scrollHeight)
 }
 
 async function openSeed(page: Page, fixture: ChatScrollFixture, tailMarker?: string): Promise<void> {
@@ -428,9 +426,12 @@ async function loadEarlierWithAnchor(page: Page): Promise<void> {
   const older = page.getByRole('button', { name: 'Load earlier', exact: true })
   await older.waitFor({ timeout: 10_000 })
   const anchor = await visibleFlowAnchor(page)
-  const before = await loadedFlowRows(page)
+  // The rendered extent grows when the earlier page's real messages mount; it is
+  // a content signal that holds even while virtualization unmounts off-screen
+  // rows, unlike a virtualized DOM row count.
+  const beforeExtent = await scrollContentExtent(page)
   await older.click()
-  await expect.poll(() => loadedFlowRows(page), { timeout: 30_000 }).toBeGreaterThan(before)
+  await expect.poll(() => scrollContentExtent(page), { timeout: 30_000 }).toBeGreaterThan(beforeExtent)
   await nextPaint(page)
   await expectSameFlowTop(page, anchor)
 }
@@ -501,7 +502,7 @@ describe('web e2e: long Chat scroll contract', () => {
         await world.page.getByRole('button', { name: 'Send message', exact: true }).click()
         await world.page.getByText(LIVE_TEXT_FIRST, { exact: false }).last().waitFor({ timeout: 15_000 })
         await wheelToHistoryStart(world.page)
-        const beforeRows = await loadedFlowRows(world.page)
+        const beforeExtent = await scrollContentExtent(world.page)
         await world.page.getByRole('button', { name: 'Load earlier', exact: true }).click()
         await expect.poll(() => held, { timeout: 10_000 }).toBe(true)
 
@@ -514,7 +515,9 @@ describe('web e2e: long Chat scroll contract', () => {
         ).toBeGreaterThan(chunksAfterAnchor + 5)
 
         releaseHistory()
-        await expect.poll(() => loadedFlowRows(world.page), { timeout: 30_000 }).toBeGreaterThan(beforeRows)
+        // The earlier page's real history landed (content extent grew) while the
+        // reader's anchor stayed put — validate data + anchor, not DOM row count.
+        await expect.poll(() => scrollContentExtent(world.page), { timeout: 30_000 }).toBeGreaterThan(beforeExtent)
         await nextPaint(world.page)
         await expectSameFlowTop(world.page, readerAnchor)
       } finally {
