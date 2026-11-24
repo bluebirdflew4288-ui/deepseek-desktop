@@ -65,15 +65,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
       await cp(extensionRoot, firstExtension, { recursive: true })
       await cp(extensionRoot, secondExtension, { recursive: true })
       application = await launch(userData, firstExtension)
-      // Surface the runtime's own status message (not just phase) so a Windows
-      // failure reports the real reason instead of being blamed on the runner.
-      let memoryStatus = await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')
-      const memoryDeadline = Date.now() + 10_000
-      while (memoryStatus.phase !== 'ready' && Date.now() < memoryDeadline) {
-        await new Promise(resolve => setTimeout(resolve, 50))
-        memoryStatus = await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')
-      }
-      expect(memoryStatus, `DeepSeek Memory runtime status: ${JSON.stringify(memoryStatus)}`).toMatchObject({ phase: 'ready' })
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       expect(await fixture(application, 'extensionIds')).toEqual({
         chat: [extensionId],
         harness: [],
@@ -103,7 +95,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
       await application.close()
 
       application = await launch(userData, secondExtension)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const memories = await fixture(application, 'request', [{ type: 'GET_MEMORIES' }]) as Array<{ id: number; content: string }>
       expect(memories.some(memory => memory.content.includes('ORBIT-482'))).toBe(true)
       expect(memories.some(memory => memory.content.includes('四空格缩进'))).toBe(true)
@@ -135,9 +127,9 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       await fixture(application, 'destroyHost')
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('failed')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('failed')
       expect(await fixture(application, 'anchorAlive')).toBe(true)
       expect(await fixture(application, 'extensionIds')).toEqual({ chat: [], harness: [] })
     } finally {
@@ -151,7 +143,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const saved = await fixture(application, 'request', [{
         type: 'SAVE_MEMORY',
         payload: {
@@ -192,7 +184,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const userCall = '<memory_save>{"type":"user","name":"用户原文","content":"不得扫描用户消息。","tags":[]}</memory_save>'
       const oldAssistantCall = '<memory_save>{"type":"topic","name":"旧回复","content":"旧回复只隐藏，不补写。","tags":[]}</memory_save>'
       const currentAssistantCall = '<memory_save>{"type":"reference","name":"当前回复","content":"当前回复走渲染兜底。","tags":["兜底"]}</memory_save>'
@@ -229,7 +221,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const retriedCall = '<memory_save>{"type":"reference","name":"重试回复","content":"投递被拒后仍要落库。","tags":["兜底"]}</memory_save>'
       const html = `<div class="ds-message" data-message-author-role="assistant"><div class="ds-markdown">${retriedCall.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div></div>`
       await fixture(application, 'openRenderedFallback', [html, 1])
@@ -256,7 +248,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const body = '{"type":"reference","name":"元素回复","content":"真实元素路径保留节点所有权。","tags":["兜底"]}'
       const html = `<div class="ds-message" data-message-author-role="assistant"><div class="ds-markdown"><p>已保存。</p><memory_save>${body}</memory_save></div></div>`
       await fixture(application, 'openRenderedFallback', [html])
@@ -284,7 +276,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const userPasted = '<memory_save>{"type":"user","name":"用户示例","content":"用户粘贴的示例不得写入长期 Memory。","tags":[]}</memory_save>'
       const assistantCall = '<memory_save>{"type":"reference","name":"助手回复","content":"助手回复证明扫描确实发生过。","tags":[]}</memory_save>'
       const html = [
@@ -309,7 +301,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const unknownCall = '<memory_save>{"type":"topic","name":"身份不明","content":"身份不明的消息不得写入长期 Memory。","tags":[]}</memory_save>'
       const html = `<div class="ds-message"><div class="ds-markdown">${unknownCall.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div></div>`
       await fixture(application, 'openRenderedFallback', [html])
@@ -326,7 +318,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const driftedCall = '<memory_save>{"type":"topic","name":"漂移选择器","content":"选择器漂移时不得写入长期 Memory。","tags":[]}</memory_save>'
       const drifted = `<div class="ds-message zz9999aa _0000000"><div class="ds-markdown">${driftedCall.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</div></div>`
       await fixture(application, 'openRenderedFallback', [drifted])
@@ -349,7 +341,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const esc = (value: string) => value.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
       const call = '<memory_save>{"type":"reference","name":"实时回复","content":"仅当前 completion 授权后才落库。","tags":["兜底"]}</memory_save>'
       const html = `<div class="ds-message" data-message-author-role="assistant"><div class="ds-markdown">${esc(call)}</div></div>`
@@ -372,7 +364,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const esc = (value: string) => value.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
       const firstCall = '<memory_save>{"type":"reference","name":"首次授权","content":"第一次授权只消费一次。","tags":["a"]}</memory_save>'
       const secondCall = '<memory_save>{"type":"reference","name":"二次授权","content":"需要新的 completion 授权。","tags":["b"]}</memory_save>'
@@ -403,7 +395,7 @@ describe('DeepSeek Memory Electron lifecycle', () => {
     let application: ElectronApplication | undefined
     try {
       application = await launch(userData)
-      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application, 'status')).phase, { timeout: 10_000 }).toBe('ready')
+      await expect.poll(async () => (await fixture<ReturnType<MemoryFixture['status']>>(application!, 'status')).phase, { timeout: 10_000 }).toBe('ready')
       const esc = (value: string) => value.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
       const historicalCall = '<memory_save>{"type":"topic","name":"历史无角色","content":"无角色历史消息即使有授权也不得补录。","tags":[]}</memory_save>'
       const liveCall = '<memory_save>{"type":"reference","name":"本地验收标记","content":"生产 DOM 无角色属性时最新消息依赖 completion 授权落库。","tags":[]}</memory_save>'
