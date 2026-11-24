@@ -141,7 +141,7 @@ describe('Desktop development commands', () => {
     // re-quotes the compound command and cmd exits with a filename syntax error.
     const outcome = await runManagedProcess({
       command: process.env.ComSpec ?? 'cmd.exe',
-      args: ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'],
+      args: ['/d', '/s', '/c', 'node -p !!process.versions.electron && npm --version && npx --version'],
       env,
       timeoutMs: 20_000,
     })
