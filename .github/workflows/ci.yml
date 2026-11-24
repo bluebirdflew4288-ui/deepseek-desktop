@@ -173,16 +173,21 @@ jobs:
           exit "$sandbox_status"
 
       # The coverage aggregate runs every unit suite plus the Desktop Electron
-      # fixtures, so it needs the same compiled tree the consumer lane builds:
-      # workspace/Desktop lib output, the pinned npm runtime staged by
-      # `stage:npm`, and a materialized Electron binary. Building first does not
-      # shift measurement off source — the tsconfig paths map still wins over
-      # package exports, so `coverage.include` keeps measuring `packages/*/src`.
-      - name: Build workspace and stage the Desktop runtime
+      # fixtures. It needs the Desktop bundle, the pinned npm runtime, and a
+      # materialized Electron binary — but the per-file 100% gate must measure
+      # `packages/*/src`. Package `exports` point at `lib/index.js`, so any
+      # workspace `lib/` present during the run shadows `src` and drops coverage
+      # to 0%. Build only what the fixtures need, then drop the workspace package
+      # build output so tests resolve `@deepseek-ai/dsh-*` back to `src`. The
+      # Desktop bundle is self-contained, so removing package lib keeps it
+      # runnable.
+      - name: Build the Desktop runtime; keep workspace packages source-resolved
         run: |
-          pnpm run build
+          pnpm run build:lib
+          pnpm run build:desktop
           pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
           pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
+          find packages -type d -name lib -prune -exec rm -rf {} +
 
       - name: Install xvfb for the Electron fixtures
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
@@ -500,16 +505,22 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The complete inventory schedules coverage and the Desktop fixtures beside
-      # the build gate, but those gates need built `lib/`, the staged
-      # `runtime-npm`, and a materialized Electron binary before they start.
-      # Pre-build so the concurrent coverage gate resolves vendor/package entries
-      # and the Desktop fixtures find their artifacts.
-      - name: Build workspace and stage the Desktop runtime
+      # the build gate. Build only the Desktop bundle (+staged npm/Electron) and
+      # then drop workspace package lib/ so coverage resolves `@deepseek-ai/dsh-*`
+      # to src (package `exports` would otherwise load lib and zero src coverage).
+      - name: Build the Desktop runtime; keep workspace packages source-resolved
         shell: pwsh
         run: |
-          pnpm run build
+          pnpm run build:lib
+          pnpm run build:desktop
           pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
           pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
+          Get-ChildItem packages -Directory | ForEach-Object {
+            Get-ChildItem $_.FullName -Directory | ForEach-Object {
+              $lib = Join-Path $_.FullName 'lib'
+              if (Test-Path $lib) { Remove-Item -Recurse -Force $lib }
+            }
+          }
 
       - name: Run complete native Windows gate inventory
         shell: pwsh
