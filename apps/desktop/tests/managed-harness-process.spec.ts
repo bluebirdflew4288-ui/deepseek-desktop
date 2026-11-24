@@ -124,7 +124,9 @@ describe('managed Harness child process runner', () => {
     const controller = new AbortController()
     const readiness = pidLineReadiness()
     const pending = run(
-      'process.on("SIGTERM", () => { console.log("ignored"); });'
+      // Write synchronously so the escalation's eventual SIGKILL cannot drop a
+      // buffered console.log before the parent observes the ignored-SIGTERM line.
+      'process.on("SIGTERM", () => { require("node:fs").writeSync(1, "ignored\\n"); });'
       + `setTimeout(() => {}, ${String(SELF_LIMIT_MS)});`,
       { signal: controller.signal, onOutput: readiness.onOutput },
     )
