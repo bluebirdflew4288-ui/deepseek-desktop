@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { assertDevelopmentToolLaunchers, developmentLauncherOptions, developmentLauncherScripts, placeDevelopmentToolLaunchers } from '../src/development-tool-launchers.ts'
 import { harnessHostEnvironment } from '../src/harness-host-environment.ts'
+import { runManagedProcess } from '../src/managed-harness-process.ts'
 
 const run = promisify(execFile)
 const desktop = resolve(import.meta.dirname, '..')
@@ -136,7 +137,15 @@ describe('Desktop development commands', () => {
     await placeDevelopmentToolLaunchers(options)
     const env = harnessHostEnvironment(process.env, {}, options.directory, {})
     env.PATH = options.directory
-    const output = await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'], { env, cwd: root, windowsVerbatimArguments: true })
-    expect(output.stdout.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
+    // Use the same shell-free spawn path as the packaged runtime probe; execFile
+    // re-quotes the compound command and cmd exits with a filename syntax error.
+    const outcome = await runManagedProcess({
+      command: process.env.ComSpec ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'],
+      env,
+      timeoutMs: 20_000,
+    })
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.output.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
   }, 20_000)
 })
