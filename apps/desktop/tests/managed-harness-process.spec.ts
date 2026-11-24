@@ -122,19 +122,22 @@ describe('managed Harness child process runner', () => {
 
   it.skipIf(process.platform === 'win32')('escalates to SIGKILL one grace period after an ignored SIGTERM', { timeout: 40_000 }, async () => {
     const controller = new AbortController()
-    const readiness = pidLineReadiness()
+    // Wait for the child to confirm its SIGTERM handler is installed before
+    // signalling: the shared `run()` writes the PID before `${script}`, so the
+    // PID line alone can arrive while the handler is not yet registered, and an
+    // early SIGTERM would take the default action (no "ignored" line).
+    let markHandlerReady = (): void => {}
+    const handlerInstalled = new Promise<void>((resolve) => { markHandlerReady = resolve })
     const pending = run(
-      // Write synchronously so the escalation's eventual SIGKILL cannot drop a
-      // buffered console.log before the parent observes the ignored-SIGTERM line.
       'process.on("SIGTERM", () => { require("node:fs").writeSync(1, "ignored\\n"); });'
+      + 'require("node:fs").writeSync(1, "handler-ready\\n");'
       + `setTimeout(() => {}, ${String(SELF_LIMIT_MS)});`,
-      { signal: controller.signal, onOutput: readiness.onOutput },
+      {
+        signal: controller.signal,
+        onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
+      },
     )
-    try { await readiness.ready } catch (error) {
-      controller.abort()
-      await pending
-      throw error
-    }
+    await handlerInstalled
     const started = Date.now()
     controller.abort()
     const outcome = await pending
