@@ -136,7 +136,7 @@ describe('Desktop development commands', () => {
     await placeDevelopmentToolLaunchers(options)
     const env = harnessHostEnvironment(process.env, {}, options.directory, {})
     env.PATH = options.directory
-    const output = await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'], { env, cwd: root })
+    const output = await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'], { env, cwd: root, windowsVerbatimArguments: true })
     expect(output.stdout.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
   }, 20_000)
 })
