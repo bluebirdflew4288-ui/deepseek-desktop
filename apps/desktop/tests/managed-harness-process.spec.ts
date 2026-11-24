@@ -103,13 +103,23 @@ describe('managed Harness child process runner', () => {
 
   it.skipIf(process.platform === 'win32')('never escalates a child that honors SIGTERM', async () => {
     const controller = new AbortController()
-    const readiness = pidLineReadiness()
+    // Gate on handler installation (see the escalation test): the PID line can
+    // arrive before the SIGTERM handler is registered, and an early signal would
+    // take the default action. Write "graceful" synchronously so process.exit(0)
+    // cannot drop a buffered console.log.
+    let markHandlerReady = (): void => {}
+    const handlerInstalled = new Promise<void>((resolve) => { markHandlerReady = resolve })
     const pending = run(
-      'process.on("SIGTERM", () => { console.log("graceful"); process.exit(0) });'
+      'process.on("SIGTERM", () => { require("node:fs").writeSync(1, "graceful\\n"); process.exit(0) });'
+      + 'require("node:fs").writeSync(1, "handler-ready\\n");'
       + `setTimeout(() => {}, ${String(SELF_LIMIT_MS)});`,
-      { signal: controller.signal, onOutput: readiness.onOutput },
+      {
+        signal: controller.signal,
+        onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
+      },
     )
-    try { await readiness.ready } finally { controller.abort() }
+    await handlerInstalled
+    controller.abort()
     const outcome = await pending
 
     // The handler's own line and a voluntary exit are the proof: a killed child
