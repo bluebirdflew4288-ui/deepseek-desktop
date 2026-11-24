@@ -496,7 +496,6 @@ describe('web e2e: long Chat scroll contract', () => {
       })
 
       const settled = world.scaffold.whenTurnSettled(60_000)
-      let chunksAtHold = 0
       try {
         const composer = world.page.locator('textarea:enabled').last()
         await composer.fill(LIVE_TEXT_PROMPT)
@@ -509,12 +508,6 @@ describe('web e2e: long Chat scroll contract', () => {
 
         await wheelTranscript(world.page, 420)
         const readerAnchor = await visibleFlowAnchor(world.page)
-        // Record streaming progress at the held point; verify AFTER release and
-        // settlement that streaming continued without loss. While a history page
-        // is in flight the client legitimately defers further chunks, so
-        // requiring growth during the hold was an invalid expectation.
-        chunksAtHold = world.events.filter(event => event.type === 'assistant/chunk').length
-
         releaseHistory()
         // The earlier page's real history landed (content extent grew) while the
         // reader's anchor stayed put — validate data + anchor, not DOM row count.
@@ -527,10 +520,12 @@ describe('web e2e: long Chat scroll contract', () => {
 
       await settled
       await expect.poll(() => world.page.locator('[data-streaming="true"]').count(), { timeout: 15_000 }).toBe(0)
-      await world.page.getByText(LIVE_TEXT_DONE, { exact: false }).last().waitFor({ timeout: 15_000 })
-      // No data loss across the concurrent history load: streaming produced more
-      // assistant chunks than at the held point and reached its completion text.
-      expect(world.events.filter(event => event.type === 'assistant/chunk').length).toBeGreaterThan(chunksAtHold)
+      // No data loss across the concurrent history load: the full streamed reply
+      // content is present end-to-end (both its opening and completion text),
+      // not merely a chunk count.
+      const transcript = world.page.locator('[data-conversation-scroll]')
+      await expect.poll(() => transcript.getByText(LIVE_TEXT_FIRST, { exact: false }).count(), { timeout: 15_000 }).toBeGreaterThan(0)
+      await expect.poll(() => transcript.getByText(LIVE_TEXT_DONE, { exact: false }).count(), { timeout: 15_000 }).toBeGreaterThan(0)
       await world.page.unroute('**/api/session.history')
 
       let additionalPages = 0

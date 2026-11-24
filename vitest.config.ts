@@ -277,6 +277,9 @@ export default defineConfig({
         functions: 100,
         lines: 100,
       },
+      // Always emit the coverage report (table + uncovered records) even when
+      // tests or thresholds fail, so the full per-file result is inspectable.
+      reportOnFailure: true,
       reporter: process.env.CI
         ? ['text', uncoveredLocationsReporter]
         : ['text', 'html', uncoveredLocationsReporter],

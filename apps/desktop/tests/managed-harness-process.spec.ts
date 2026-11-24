@@ -41,6 +41,38 @@ function run(
   })
 }
 
+/**
+ * Await the child's `handler-ready` line with a bounded timeout. If the child
+ * exits or never installs its SIGTERM handler, abort it and settle `pending` so
+ * the test fails fast instead of hanging on an unresolved promise.
+ * @param installed - resolves when the handler-ready line is seen.
+ * @param controller - aborts the child on failure.
+ * @param pending - the running child outcome, awaited during cleanup.
+ * @param timeoutMs - readiness deadline.
+ */
+async function awaitHandlerReady(
+  installed: Promise<void>,
+  controller: AbortController,
+  pending: Promise<ManagedProcessOutcome>,
+  timeoutMs = 15_000,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      installed,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => { reject(new Error(`Child did not report handler-ready within ${timeoutMs}ms`)) }, timeoutMs)
+      }),
+    ])
+  } catch (error) {
+    controller.abort()
+    await pending.catch(() => {})
+    throw error
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** Resolve only after the parent has received the child's PID line. */
 function pidLineReadiness(): { readonly ready: Promise<void>; readonly onOutput: (chunk: string) => void } {
   let resolveReady!: () => void
@@ -118,7 +150,7 @@ describe('managed Harness child process runner', () => {
         onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
       },
     )
-    await handlerInstalled
+    await awaitHandlerReady(handlerInstalled, controller, pending)
     controller.abort()
     const outcome = await pending
 
@@ -147,7 +179,7 @@ describe('managed Harness child process runner', () => {
         onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
       },
     )
-    await handlerInstalled
+    await awaitHandlerReady(handlerInstalled, controller, pending)
     const started = Date.now()
     controller.abort()
     const outcome = await pending
