@@ -8,6 +8,8 @@
 
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
+import { loadWin32DialogBindings } from '../src/win32-dialog-bindings.ts'
+import { FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_PICKFOLDERS } from '../src/win32-dialog-logic.ts'
 import { pickWin32Directory, type Win32DialogInternals, type Win32DialogWorkerLike } from '../src/win32-dialog.ts'
 import type { Win32DialogWorkerMessage } from '../src/win32-dialog-worker.ts'
 
@@ -150,6 +152,22 @@ describe('pickWin32Directory', () => {
   it.skipIf(process.platform === 'win32')('rejects through the real worker where the Win32 surface is unavailable', async () => {
     await expect(pickWin32Directory(live())).rejects.toThrow('win32 folder dialog failed')
   }, 30_000)
+
+  it.skipIf(process.platform !== 'win32')('creates and configures a real COM folder dialog', async () => {
+    const bindings = await loadWin32DialogBindings()
+    expect(bindings.coInitializeSta()).toBeGreaterThanOrEqual(0)
+    try {
+      const dialog = bindings.createFolderDialog()
+      try {
+        expect(dialog.setOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR)).toBe(0)
+        expect(dialog.setTitle('选择工作目录')).toBe(0)
+      } finally {
+        dialog.release()
+      }
+    } finally {
+      bindings.coUninitialize()
+    }
+  })
 
   // win32 hosts run the true COM smoke instead: a real dialog opens briefly
   // and the abort service closes it (the same lever a disconnecting client pulls).
