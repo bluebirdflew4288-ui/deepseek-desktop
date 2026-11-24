@@ -18,6 +18,15 @@ interface ChatNotificationFixture {
   lastNotification(): { readonly source?: string; readonly kind?: string; readonly presentation?: string } | undefined
   badge(): number
   clickNotification(): void
+  setForeground(on: boolean): void
+}
+
+
+async function setForeground(application: ElectronApplication, on: boolean): Promise<void> {
+  await application.evaluate((_electron, value) => {
+    const fixture = (globalThis as typeof globalThis & { __dshDualModeFixture: ChatNotificationFixture }).__dshDualModeFixture
+    fixture.setForeground(value)
+  }, on)
 }
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -136,10 +145,7 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  // Native window focus/visibility is unavailable on a non-interactive hosted
-  // Windows runner; the notification count/dedup/persist/click behaviour stays
-  // covered by the cross-platform cases around it.
-  it.skipIf(process.platform !== 'darwin')('suppresses the alert while the desktop is foreground, on either mode', { timeout: 40_000 }, async () => {
+  it('suppresses the alert while the desktop is foreground, on either mode', { timeout: 40_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-fg-'))
     let application: ElectronApplication | undefined
     try {
@@ -147,13 +153,7 @@ describe('Chat completion notifications', () => {
       const { chrome, chat } = await openChat(application)
       // Suppression depends on real window focus, which another spec in the same
       // run can take away. Force it and wait for it before measuring.
-      await application.evaluate(({ BrowserWindow, app }) => {
-        BrowserWindow.getAllWindows()[0]?.show()
-        BrowserWindow.getAllWindows()[0]?.focus()
-        app.focus({ steal: true })
-      })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await setForeground(application, true)
       expect(await finishChatReply(chat)).toBe(200)
       // Give the observer and the owner a full turn to settle before asserting absence.
       await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })
@@ -164,12 +164,7 @@ describe('Chat completion notifications', () => {
       // Foreground on Harness is still foreground for the desktop as a whole.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
       await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
-      await application.evaluate(({ BrowserWindow, app }) => {
-        BrowserWindow.getAllWindows()[0]?.focus()
-        app.focus({ steal: true })
-      })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await setForeground(application, true)
       expect(await finishChatReply(chat)).toBe(200)
       await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })
       // Suppressed banner, raised reminder: the Dock number follows the unseen
@@ -211,10 +206,7 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  // Native window focus/visibility is unavailable on a non-interactive hosted
-  // Windows runner; the notification count/dedup/persist/click behaviour stays
-  // covered by the cross-platform cases around it.
-  it.skipIf(process.platform !== 'darwin')('treats a regenerated answer as a new occurrence, repeatedly', { timeout: 40_000 }, async () => {
+  it('treats a regenerated answer as a new occurrence, repeatedly', { timeout: 40_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-regenerate-'))
     let application: ElectronApplication | undefined
     try {
@@ -224,13 +216,7 @@ describe('Chat completion notifications', () => {
       // Foreground on Harness: a regeneration must raise the dot and stay silent.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
       await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
-      await application.evaluate(({ BrowserWindow, app }) => {
-        BrowserWindow.getAllWindows()[0]?.show()
-        BrowserWindow.getAllWindows()[0]?.focus()
-        app.focus({ steal: true })
-      })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await setForeground(application, true)
 
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
@@ -308,10 +294,7 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  // Native window focus/visibility is unavailable on a non-interactive hosted
-  // Windows runner; the notification count/dedup/persist/click behaviour stays
-  // covered by the cross-platform cases around it.
-  it.skipIf(process.platform !== 'darwin')('restores the desktop and selects Chat when the notification is clicked', { timeout: 40_000 }, async () => {
+  it('restores the desktop and selects Chat when the notification is clicked', { timeout: 40_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-click-'))
     let application: ElectronApplication | undefined
     try {
@@ -338,10 +321,7 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  // Native window focus/visibility is unavailable on a non-interactive hosted
-  // Windows runner; the notification count/dedup/persist/click behaviour stays
-  // covered by the cross-platform cases around it.
-  it.skipIf(process.platform !== 'darwin')('acknowledges the Chat reminder when the app returns to the foreground on Chat', { timeout: 40_000 }, async () => {
+  it('acknowledges the Chat reminder when the app returns to the foreground on Chat', { timeout: 40_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-foreground-'))
     let application: ElectronApplication | undefined
     try {
@@ -354,13 +334,7 @@ describe('Chat completion notifications', () => {
 
       // No notification was clicked: the user brought the app back to the surface
       // that already shows Chat, which is the acknowledgement this case pins.
-      await application.evaluate(({ BrowserWindow, app }) => {
-        BrowserWindow.getAllWindows()[0]?.show()
-        BrowserWindow.getAllWindows()[0]?.focus()
-        app.focus({ steal: true })
-      })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await setForeground(application, true)
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
       await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
       // The rendered Chat dot follows the acknowledged state, and acknowledging it
@@ -376,10 +350,7 @@ describe('Chat completion notifications', () => {
     }
   })
 
-  // Native window focus/visibility is unavailable on a non-interactive hosted
-  // Windows runner; the notification count/dedup/persist/click behaviour stays
-  // covered by the cross-platform cases around it.
-  it.skipIf(process.platform !== 'darwin')('keeps the Chat reminder while the foreground returns to Harness, then clears it on entry', { timeout: 40_000 }, async () => {
+  it('keeps the Chat reminder while the foreground returns to Harness, then clears it on entry', { timeout: 40_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-entry-'))
     let application: ElectronApplication | undefined
     try {
@@ -392,13 +363,7 @@ describe('Chat completion notifications', () => {
       expect(await finishChatReply(chat)).toBe(200)
       await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
 
-      await application.evaluate(({ BrowserWindow, app }) => {
-        BrowserWindow.getAllWindows()[0]?.show()
-        BrowserWindow.getAllWindows()[0]?.focus()
-        app.focus({ steal: true })
-      })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
+      await setForeground(application, true)
       // Acknowledgement is scoped to the source in view: a return to Harness must not
       // spend a reminder that belongs to Chat.
       await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })

@@ -262,6 +262,10 @@ let notificationBadge = 0
 let notificationCount = 0
 let notificationEvent
 let notificationClick
+// Simulated window foreground: the hosted Windows runner is non-interactive,
+// so tests drive focus/visibility through the fixture instead of the OS.
+let fixtureForeground = true
+const fixtureWindows = []
 const harnessUpdateActions = []
 const notificationAdapter = {
   supported: () => true,
@@ -290,6 +294,17 @@ globalThis.__dshDualModeFixture = {
   state: fixtureState,
   showHarnessUpdate(view) { desktopApplication.publishHarnessUpdate(view) },
   harnessUpdateActions: () => [...harnessUpdateActions],
+  setForeground(on) {
+    fixtureForeground = on
+    for (const win of fixtureWindows) {
+      if (on) {
+        try { win.emit('show') } catch (_ignore) {}
+        try { win.emit('focus') } catch (_ignore) {}
+      } else {
+        try { win.emit('blur') } catch (_ignore) {}
+      }
+    }
+  },
 }
 
 function closeServers() {
@@ -320,7 +335,16 @@ async function boot() {
     chromePath: join(DESKTOP_DIR, 'resources/mode-chrome.html'),
     chromePreloadPath: join(DESKTOP_DIR, 'lib/mode-chrome-preload.cjs'),
     platform: process.platform,
-    createWindow: options => new BrowserWindow(options),
+    createWindow: options => {
+      const win = new BrowserWindow(options)
+      // Simulated visibility so foreground/acknowledgement logic runs deterministically
+      // on a non-interactive runner; the notification adapter is a fake already.
+      win.isFocused = () => fixtureForeground
+      win.isVisible = () => true
+      win.isMinimized = () => false
+      fixtureWindows.push(win)
+      return win
+    },
     createView: options => {
       const view = new WebContentsView(options)
       allViews.add(view)
