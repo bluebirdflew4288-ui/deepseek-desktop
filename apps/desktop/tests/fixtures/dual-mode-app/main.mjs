@@ -262,9 +262,14 @@ let notificationBadge = 0
 let notificationCount = 0
 let notificationEvent
 let notificationClick
-// Simulated window foreground: the hosted Windows runner is non-interactive,
-// so tests drive focus/visibility through the fixture instead of the OS.
-let fixtureForeground = true
+// Opt-in simulated window state so a non-interactive runner can drive foreground
+// deterministically. Off by default: other specs that share this fixture keep the
+// real BrowserWindow semantics. When enabled, the observed state transitions with
+// the real hide/show/focus/blur/minimize/restore calls rather than being constant.
+let simulateWindowSimulation = false
+let simFocused = true
+let simVisible = true
+let simMinimized = false
 const fixtureWindows = []
 const harnessUpdateActions = []
 const notificationAdapter = {
@@ -294,8 +299,11 @@ globalThis.__dshDualModeFixture = {
   state: fixtureState,
   showHarnessUpdate(view) { desktopApplication.publishHarnessUpdate(view) },
   harnessUpdateActions: () => [...harnessUpdateActions],
+  enableWindowSimulation() { simulateWindowSimulation = true },
   setForeground(on) {
-    fixtureForeground = on
+    simulateWindowSimulation = true
+    if (on) { simFocused = true; simVisible = true; simMinimized = false }
+    else { simFocused = false }
     for (const win of fixtureWindows) {
       if (on) {
         try { win.emit('show') } catch (_ignore) {}
@@ -337,11 +345,20 @@ async function boot() {
     platform: process.platform,
     createWindow: options => {
       const win = new BrowserWindow(options)
-      // Simulated visibility so foreground/acknowledgement logic runs deterministically
-      // on a non-interactive runner; the notification adapter is a fake already.
-      win.isFocused = () => fixtureForeground
-      win.isVisible = () => true
-      win.isMinimized = () => false
+      const base = {
+        hide: win.hide.bind(win), show: win.show.bind(win), focus: win.focus.bind(win),
+        blur: win.blur.bind(win), minimize: win.minimize.bind(win), restore: win.restore.bind(win),
+        isFocused: win.isFocused.bind(win), isVisible: win.isVisible.bind(win), isMinimized: win.isMinimized.bind(win),
+      }
+      win.isFocused = () => simulateWindowSimulation ? simFocused : base.isFocused()
+      win.isVisible = () => simulateWindowSimulation ? simVisible : base.isVisible()
+      win.isMinimized = () => simulateWindowSimulation ? simMinimized : base.isMinimized()
+      win.hide = () => { if (simulateWindowSimulation) { simVisible = false; simFocused = false } return base.hide() }
+      win.show = () => { if (simulateWindowSimulation) { simVisible = true } return base.show() }
+      win.focus = () => { if (simulateWindowSimulation) { simFocused = true; simVisible = true } return base.focus() }
+      win.blur = () => { if (simulateWindowSimulation) { simFocused = false } return base.blur() }
+      win.minimize = () => { if (simulateWindowSimulation) { simMinimized = true; simFocused = false } return base.minimize() }
+      win.restore = () => { if (simulateWindowSimulation) { simMinimized = false } return base.restore() }
       fixtureWindows.push(win)
       return win
     },
