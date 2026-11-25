@@ -40,6 +40,7 @@ async function setForeground(application: ElectronApplication, on: boolean): Pro
  */
 async function boundedStep<T>(label: string, run: () => Promise<T>, budgetMs = 15_000): Promise<T> {
   let timer: NodeJS.Timeout | undefined
+  const startedAt = Date.now()
   try {
     return await Promise.race([
       run(),
@@ -51,6 +52,10 @@ async function boundedStep<T>(label: string, run: () => Promise<T>, budgetMs = 1
     ])
   } finally {
     clearTimeout(timer)
+    const elapsed = Date.now() - startedAt
+    // Slow steps are the difference between a healthy run and a test wall; the
+    // line names where a slow-but-successful run spent its time.
+    if (elapsed > 2_000) console.error(`[chat-step] '${label}' took ${String(elapsed)}ms`)
   }
 }
 
@@ -101,7 +106,23 @@ async function closeApplication(application: ElectronApplication | undefined): P
  * @returns Completion once the tree is gone or the retry window elapsed.
  */
 async function removeUserData(directory: string): Promise<void> {
-  await rm(directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+  // The removal itself retries across the handle-release window and can grind
+  // for minutes on a Chromium profile whose files stay locked; cleanup is
+  // hygiene, never an assertion, so it must not eat the test deadline either.
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      rm(directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 }),
+      new Promise<void>((resolveGiveUp) => {
+        timer = setTimeout(() => {
+          console.error('[chat-step] user-data removal gave up after 15000ms')
+          resolveGiveUp()
+        }, 15_000)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
@@ -331,7 +352,16 @@ describe('Chat completion notifications', () => {
       await setForeground(application, true)
 
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
-      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => {
+        const ledger = await persistedNotifications(directory)
+        // A chat receipt that landed without the attention flag is the view
+        // decision (already viewed); no receipt at all is an observer miss.
+        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
+          console.error('[chat-diag] chat receipt present but chatAttention stays '
+            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        }
+        return ledger.chatAttention
+      }).toBe(true)
       await new Promise((resolveWait) => { setTimeout(resolveWait, 600) })
       expect((await notificationState(application)).count).toBe(0)
       // Foreground on Harness: suppressed banner, but the unseen Chat reply is
@@ -346,7 +376,16 @@ describe('Chat completion notifications', () => {
       await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
 
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
-      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => {
+        const ledger = await persistedNotifications(directory)
+        // A chat receipt that landed without the attention flag is the view
+        // decision (already viewed); no receipt at all is an observer miss.
+        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
+          console.error('[chat-diag] chat receipt present but chatAttention stays '
+            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        }
+        return ledger.chatAttention
+      }).toBe(true)
       await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       // Background regeneration alerts, and the ledger still holds one receipt each.
@@ -441,7 +480,16 @@ describe('Chat completion notifications', () => {
       const { chrome, chat } = await openChat(application)
       await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
-      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => {
+        const ledger = await persistedNotifications(directory)
+        // A chat receipt that landed without the attention flag is the view
+        // decision (already viewed); no receipt at all is an observer miss.
+        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
+          console.error('[chat-diag] chat receipt present but chatAttention stays '
+            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        }
+        return ledger.chatAttention
+      }).toBe(true)
       await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       // No notification was clicked: the user brought the app back to the surface
@@ -473,7 +521,16 @@ describe('Chat completion notifications', () => {
       await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
       await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
-      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => {
+        const ledger = await persistedNotifications(directory)
+        // A chat receipt that landed without the attention flag is the view
+        // decision (already viewed); no receipt at all is an observer miss.
+        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
+          console.error('[chat-diag] chat receipt present but chatAttention stays '
+            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        }
+        return ledger.chatAttention
+      }).toBe(true)
 
       await setForeground(application, true)
       // Acknowledgement is scoped to the source in view: a return to Harness must not
