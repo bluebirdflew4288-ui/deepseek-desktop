@@ -64,6 +64,19 @@ async function closeApplication(application: ElectronApplication | undefined): P
   ]).catch(() => undefined)
 }
 
+/**
+ * Remove one test's user-data directory with the bounded retry Windows teardown
+ * needs: Chromium child processes and antivirus release their handles
+ * asynchronously after the app exits, and an unretried removal fails with
+ * EBUSY/EPERM under load. The retry window matches
+ * `scripts/test-fixture-cleanup.ts`, which owns the same race for git fixtures.
+ * @param directory - The user-data directory this test created.
+ * @returns Completion once the tree is gone or the retry window elapsed.
+ */
+async function removeUserData(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+}
+
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
   assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
   const application = await _electron.launch({
@@ -198,7 +211,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.unread).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -236,7 +249,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(2)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -259,7 +272,7 @@ describe('Chat completion notifications', () => {
       expect((await notificationState(application)).count).toBe(1)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -309,7 +322,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.unread).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -347,7 +360,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.unread).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -374,7 +387,7 @@ describe('Chat completion notifications', () => {
       await pollState(async () => (await notificationState(application!)).badge).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -403,7 +416,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(1)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -438,7 +451,7 @@ describe('Chat completion notifications', () => {
       expect(ledger.harnessAttention).not.toBe(true)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -479,7 +492,7 @@ describe('Chat completion notifications', () => {
       expect((await notificationState(application)).count).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 
@@ -502,7 +515,7 @@ describe('Chat completion notifications', () => {
       expect((await notificationState(application)).count).toBe(0)
     } finally {
       await closeApplication(application)
-      await rm(directory, { recursive: true, force: true })
+      await removeUserData(directory)
     }
   })
 })
