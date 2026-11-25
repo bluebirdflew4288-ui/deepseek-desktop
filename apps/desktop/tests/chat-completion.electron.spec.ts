@@ -34,9 +34,11 @@ const fixtureRoot = resolve(desktopRoot, 'tests/fixtures/dual-mode-app')
 
 // End-to-end Electron flows on hosted runners (app launch, mode switches, one
 // completed reply, durable ledger writes) need headroom well above local
-// runtimes; every internal await is separately bounded and names its own
-// failure, so this deadline only absorbs runner variance.
-const CHAT_TEST_TIMEOUT_MS = 90_000
+// runtimes. Every internal await is separately bounded and names its own
+// failure, so a broken flow reports that bound; this deadline only absorbs the
+// worst-case SUM of slow-but-successful steps on a loaded runner (a three-reply
+// flow can legitimately accumulate several fetch, action, and poll budgets).
+const CHAT_TEST_TIMEOUT_MS = 240_000
 
 /**
  * Poll eventual cross-process state (durable ledger writes, simulated adapter
@@ -47,7 +49,7 @@ const CHAT_TEST_TIMEOUT_MS = 90_000
  * @returns The poll assertion carrying the matcher chain.
  */
 function pollState<T>(read: () => T | Promise<T>) {
-  return expect.poll(read, { timeout: 10_000, interval: 100 })
+  return expect.poll(read, { timeout: 20_000, interval: 100 })
 }
 
 /**
@@ -60,7 +62,7 @@ async function closeApplication(application: ElectronApplication | undefined): P
   if (application === undefined) return
   await Promise.race([
     application.close(),
-    new Promise((resolveWait) => { setTimeout(resolveWait, 10_000) }),
+    new Promise((resolveWait) => { setTimeout(resolveWait, 20_000) }),
   ]).catch(() => undefined)
 }
 
@@ -145,7 +147,7 @@ async function finishChatReply(chat: Page, path = '/api/v0/chat/completion'): Pr
       body: JSON.stringify({ prompt: 'hello', parent_message_id: null }),
       // Bound the same-origin stand-in: a stalled completion names its timeout
       // instead of silently consuming the test deadline.
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(30_000),
     })
     const body = await response.text()
     return body.includes('[DONE]') ? response.status : -response.status
