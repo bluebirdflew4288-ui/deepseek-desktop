@@ -64,10 +64,21 @@ async function modeChrome(application: ElectronApplication): Promise<Page> {
   throw new Error(`mode chrome page did not settle: ${application.windows().map(page => page.url()).join(', ')}`)
 }
 
+/**
+ * Poll eventual rendered/window state with an explicit budget: vitest's
+ * one-second default expires before a loaded hosted runner finishes the app
+ * side of a mode switch or a dot refresh this test then reads.
+ * @param read - Value to re-evaluate until it matches the chained matcher.
+ * @returns The poll assertion carrying the matcher chain.
+ */
+function pollState<T>(read: () => T | Promise<T>) {
+  return expect.poll(read, { timeout: 20_000, interval: 100 })
+}
+
 async function selectMode(chrome: Page, mode: 'chat' | 'harness'): Promise<void> {
   const segment = chrome.locator(`#mode-switch [data-mode="${mode}"]`)
   await segment.click()
-  await expect.poll(() => segment.getAttribute('aria-checked')).toBe('true')
+  await pollState(() => segment.getAttribute('aria-checked')).toBe('true')
 }
 
 async function waitForChromeWidth(chrome: Page, width: number): Promise<void> {
@@ -350,22 +361,22 @@ describe('desktop dual-mode Electron application', () => {
 
         await shell.bringToFront()
         await shell.keyboard.press('Meta+W')
-        await expect.poll(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: false })
+        await pollState(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: false })
         const commandHidden = await fixtureState(application)
         expect(commandHidden.snapshot).toEqual(initial.snapshot)
         expect(commandHidden.generations).toEqual(initial.generations)
 
         await application.evaluate(({ app }) => { app.emit('activate') })
-        await expect.poll(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: true })
+        await pollState(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: true })
 
         await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.close() })
-        await expect.poll(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: false })
+        await pollState(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: false })
         const nativeHidden = await fixtureState(application)
         expect(nativeHidden.snapshot).toEqual(initial.snapshot)
         expect(nativeHidden.generations).toEqual(initial.generations)
 
         await application.evaluate(({ app }) => { app.emit('activate') })
-        await expect.poll(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: true })
+        await pollState(() => mainWindowState(application!)).toEqual({ destroyed: false, visible: true })
 
         expect(await application.evaluate(({ Menu }) => {
           const item = Menu.getApplicationMenu()?.items
@@ -399,7 +410,7 @@ describe('desktop dual-mode Electron application', () => {
         && state.visible.harness
         && !state.visible.chat,
       )
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.mode)).toBe('harness')
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.mode)).toBe('harness')
       expect(await chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('false')
       expect(await chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
       await chrome.locator('#mode-switch [data-mode="harness"]').focus()
@@ -451,16 +462,16 @@ describe('desktop dual-mode Electron application', () => {
       expect(await modeLabelsFit(chrome)).toBe(true)
 
       await setFixtureTheme(application, 'harness', 'light')
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
-      await expect.poll(async () => Math.max(...(await chromeForeground(chrome)))).toBeLessThan(128)
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
+      await pollState(async () => Math.max(...(await chromeForeground(chrome)))).toBeLessThan(128)
       await captureWindow(application, chrome, 'harness', 'harness-light-selected')
       await setFixtureTheme(application, 'harness', 'dark')
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
-      await expect.poll(async () => Math.min(...(await chromeForeground(chrome)))).toBeGreaterThan(200)
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
+      await pollState(async () => Math.min(...(await chromeForeground(chrome)))).toBeGreaterThan(200)
       await captureWindow(application, chrome, 'harness', 'harness-dark-selected')
 
       await selectMode(chrome, 'chat')
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.mode)).toBe('chat')
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.mode)).toBe('chat')
       const initialChat = await waitForState(application, state =>
         state.snapshot?.selected === 'chat'
         && state.snapshot.chat.phase === 'ready'
@@ -488,7 +499,7 @@ describe('desktop dual-mode Electron application', () => {
         .toBeGreaterThanOrEqual(initialChat.bounds.chrome.y + initialChat.bounds.chrome.height)
       await chatContent.locator('#chat-sidebar-toggle').click()
       const runningApplication = application
-      await expect.poll(async () => (await fixtureState(runningApplication)).sidebarClicks).toBe(1)
+      await pollState(async () => (await fixtureState(runningApplication)).sidebarClicks).toBe(1)
 
       const reloadsBeforeChatChoice = initialChat.reloads.chat
       await setFixtureTheme(application, 'chat', 'light')
@@ -499,8 +510,8 @@ describe('desktop dual-mode Electron application', () => {
         && state.schemes.harness === 'light',
       )
       expect(chatLight.reloads.chat).toBe(reloadsBeforeChatChoice)
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
-      await expect.poll(() => shell.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
+      await pollState(() => shell.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
       const chatLightBackground = await evaluateChat<string>(application, 'getComputedStyle(document.body).backgroundColor')
       expect(await shell.locator('#titlebar-backdrop').evaluate(element => getComputedStyle(element).backgroundColor))
         .toBe(chatLightBackground)
@@ -516,8 +527,8 @@ describe('desktop dual-mode Electron application', () => {
       expect(correctedChat.schemes).toEqual({ chat: 'light', harness: 'light' })
       await setFixtureTheme(application, 'harness', 'system')
       await setFixtureTheme(application, 'system', 'dark')
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
-      await expect.poll(async () => Math.min(...(await chromeForeground(chrome)))).toBeGreaterThan(200)
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
+      await pollState(async () => Math.min(...(await chromeForeground(chrome)))).toBeGreaterThan(200)
       await waitForState(application, state =>
         state.preferences.chat === 'system'
         && state.preferences.harness === 'system'
@@ -526,13 +537,13 @@ describe('desktop dual-mode Electron application', () => {
       )
       await selectMode(chrome, 'chat')
       await waitForState(application, state => state.visible.chat && !state.visible.harness)
-      await expect.poll(() => shell.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
+      await pollState(() => shell.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
       const chatDarkBackground = await evaluateChat<string>(application, 'getComputedStyle(document.body).backgroundColor')
       expect(await shell.locator('#titlebar-backdrop').evaluate(element => getComputedStyle(element).backgroundColor))
         .toBe(chatDarkBackground)
       await captureWindow(application, chrome, 'chat', 'chat-dark-selected')
       await setFixtureTheme(application, 'system', 'light')
-      await expect.poll(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
+      await pollState(() => chrome.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
       await evaluateChat(application, `(() => {
         document.querySelector('#chat-draft').value = 'retained draft'
         localStorage.setItem('login-marker', 'fixture-user')
@@ -648,7 +659,7 @@ async function dockBadge(application: ElectronApplication): Promise<number> {
  * instead of exercising the dot.
  */
 async function waitForChromeNotifications(chrome: Page): Promise<void> {
-  await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('aria-label')).toBe('Chat')
+  await pollState(() => chrome.locator('button[data-mode="chat"]').getAttribute('aria-label')).toBe('Chat')
 }
 
 it('renders persisted unread semantics and restores a minimized window from a notification', { timeout: 30_000 }, async () => {
@@ -665,7 +676,7 @@ it('renders persisted unread semantics and restores a minimized window from a no
     })
     const chat = chrome.locator('button[data-mode="chat"]')
     const harness = chrome.locator('button[data-mode="harness"]')
-    await expect.poll(() => chat.getAttribute('data-unread')).toBe('1')
+    await pollState(() => chat.getAttribute('data-unread')).toBe('1')
     expect(await harness.getAttribute('data-unread')).toBe('2')
     expect(await harness.getAttribute('data-notification-kind')).toBe('failed')
     expect(await chrome.locator('#mode-switch button').evaluateAll(buttons => buttons.map(button => ({
@@ -688,7 +699,7 @@ it('renders persisted unread semantics and restores a minimized window from a no
     await chrome.locator('#notification-accent-dialog').waitFor({ state: 'visible' })
     await chrome.locator('#notification-accent-color').fill('#00ff00')
     await chrome.locator('#notification-accent-save').click()
-    await expect.poll(() => chat.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).toBe('rgb(0, 255, 0)')
+    await pollState(() => chat.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).toBe('rgb(0, 255, 0)')
     expect(await harness.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).not.toBe('rgb(0, 255, 0)')
     // The Dock number counts unseen source reminders, never ordinary unread. Whether
     // this focused Harness window suppressed the reminder decides the number, and the
@@ -699,7 +710,7 @@ it('renders persisted unread semantics and restores a minimized window from a no
       if (f.badge() !== expected) throw new Error('ordinary unread must not drive the Dock number')
       await f.notify({ id: 'warning', source: 'chat', kind: 'action-required', targetId: 'warning', occurredAt: 2, topLevel: true })
     }, expectedDock)
-    await expect.poll(() => chat.getAttribute('data-notification-kind')).toBe('action-required')
+    await pollState(() => chat.getAttribute('data-notification-kind')).toBe('action-required')
     expect(await chat.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).not.toBe('rgb(0, 255, 0)')
     expect(await chat.evaluate(el => getComputedStyle(el, '::after').backgroundColor))
       .not.toBe(await harness.evaluate(el => getComputedStyle(el, '::after').backgroundColor))
@@ -707,7 +718,7 @@ it('renders persisted unread semantics and restores a minimized window from a no
     await application.evaluate(() => {
       (globalThis as typeof globalThis & { __dshDualModeFixture: NotificationFixture }).__dshDualModeFixture.clickNotification()
     })
-    await expect.poll(() => application!.evaluate(({ BrowserWindow }) => {
+    await pollState(() => application!.evaluate(({ BrowserWindow }) => {
       const w = BrowserWindow.getAllWindows()[0]
       return w?.isVisible() && !w.isMinimized()
     })).toBe(true)
@@ -715,10 +726,10 @@ it('renders persisted unread semantics and restores a minimized window from a no
     await application.close()
     application = await launchFixture(directory)
     const restored = await modeChrome(application)
-    await expect.poll(() => restored.locator('button[data-mode="chat"]').getAttribute('data-unread')).toBe('2')
+    await pollState(() => restored.locator('button[data-mode="chat"]').getAttribute('data-unread')).toBe('2')
     expect(await restored.locator('button[data-mode="harness"]').getAttribute('data-unread')).toBe('2')
     // The Dock number is restored from the durable pending count, not from unread.
-    await expect.poll(() => dockBadge(application!)).toBe(expectedDock)
+    await pollState(() => dockBadge(application!)).toBe(expectedDock)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -774,9 +785,9 @@ it('raises a source-level Harness dot for unseen results and clears it on entry'
     // A background outcome raises the dot while the window is hidden.
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
     await notify(application, harnessOutcome('unseen', 'failed'))
-    await expect.poll(() => harnessDot(chrome)).toBe('true')
+    await pollState(() => harnessDot(chrome)).toBe('true')
     // The dot is a boolean in the source UI, while the Dock carries the number.
-    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await pollState(() => dockBadge(application!)).toBe(1)
     expect(await chrome.locator('button[data-mode="chat"]').getAttribute('data-unread')).toBe('')
     expect(await chrome.locator('button[data-mode="harness"]').getAttribute('data-unread')).toBe('')
     // It reuses the existing mode-entry dot styling.
@@ -787,15 +798,15 @@ it('raises a source-level Harness dot for unseen results and clears it on entry'
     // Entering Harness clears it and keeps it cleared across a restart.
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.show() })
     await selectMode(chrome, 'harness')
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
 
     await application.close()
     application = await launchFixture(directory)
     chrome = await modeChrome(application)
     await waitForChromeNotifications(chrome)
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -813,29 +824,29 @@ it('acknowledges only the source in view when the window returns to the foregrou
     // Two unseen results in two sources, raised while the window is out of sight.
     await notify(application, { id: 'c1', source: 'chat', kind: 'completed', targetId: 'c1', occurredAt: 1, topLevel: true, presentation: 'background-only' })
     await notify(application, harnessOutcome('h1', 'completed'))
-    await expect.poll(() => harnessDot(chrome)).toBe('true')
-    await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(2)
+    await pollState(() => harnessDot(chrome)).toBe('true')
+    await pollState(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(2)
 
     await application.evaluate(({ BrowserWindow, app }) => {
       BrowserWindow.getAllWindows()[0]?.show()
       BrowserWindow.getAllWindows()[0]?.focus()
       app.focus({ steal: true })
     })
-    await expect.poll(() => application!.evaluate(({ BrowserWindow }) =>
+    await pollState(() => application!.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]?.isFocused() === true)).toBe(true)
 
     // Harness is the surface on screen, so the return spends only the Harness reminder
     // and the Dock number is recomputed from what is left unseen.
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(1)
     await new Promise((resolveWait) => { setTimeout(resolveWait, 500) })
     expect(await chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).toBe('true')
 
     // Entering Chat is the separate acknowledgement for the surviving reminder.
     await selectMode(chrome, 'chat')
-    await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -851,7 +862,7 @@ it('clears the Harness dot when the user follows the system notification into Ha
     await waitForChromeNotifications(chrome)
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
     await notify(application, harnessOutcome('followed', 'failed'))
-    await expect.poll(() => harnessDot(chrome)).toBe('true')
+    await pollState(() => harnessDot(chrome)).toBe('true')
     // The background failure still dispatched a real alert.
     expect(await application.evaluate(() =>
       (globalThis as typeof globalThis & { __dshDualModeFixture: NotificationFixture })
@@ -860,10 +871,10 @@ it('clears the Harness dot when the user follows the system notification into Ha
     await application.evaluate(() => {
       (globalThis as typeof globalThis & { __dshDualModeFixture: NotificationFixture }).__dshDualModeFixture.clickNotification()
     })
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => chrome.locator('button[data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => chrome.locator('button[data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
     // Following the notification into Harness clears the Harness Dock reminder.
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -882,20 +893,20 @@ it.each(['light', 'dark'] as const)('renders both restored attention dots in not
     const chrome = await modeChrome(application)
     // A pre-count document migrates each set dot to one pending occurrence, so the
     // restored Dock number starts at two.
-    await expect.poll(() => dockBadge(application!)).toBe(2)
+    await pollState(() => dockBadge(application!)).toBe(2)
     for (const source of ['chat', 'harness'] as const) {
       const button = chrome.locator(`button[data-mode="${source}"]`)
-      await expect.poll(() => button.getAttribute('data-attention')).toBe('true')
+      await pollState(() => button.getAttribute('data-attention')).toBe('true')
       expect(await button.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).toBe('rgb(255, 59, 48)')
       expect(await button.getAttribute('data-unread')).toBe('')
     }
     await selectMode(chrome, 'chat')
-    await expect.poll(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).not.toBe('true')
+    await pollState(() => chrome.locator('button[data-mode="chat"]').getAttribute('data-attention')).not.toBe('true')
     expect(await harnessDot(chrome)).toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await pollState(() => dockBadge(application!)).toBe(1)
     await selectMode(chrome, 'harness')
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -911,27 +922,27 @@ it('restores an unseen Harness dot after a restart and keeps a cleared dot clear
     await waitForChromeNotifications(chrome)
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
     await notify(application, harnessOutcome('persisted', 'completed'))
-    await expect.poll(() => harnessDot(chrome)).toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await pollState(() => harnessDot(chrome)).toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(1)
 
     // Close while the dot is set: a restart must still show it and its Dock number.
     await application.close()
     application = await launchFixture(directory)
     chrome = await modeChrome(application)
     await waitForChromeNotifications(chrome)
-    await expect.poll(() => harnessDot(chrome)).toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(1)
+    await pollState(() => harnessDot(chrome)).toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(1)
 
     // Entering Harness clears it, and that cleared value also survives a restart.
     await selectMode(chrome, 'harness')
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
     await application.close()
     application = await launchFixture(directory)
     chrome = await modeChrome(application)
     await waitForChromeNotifications(chrome)
-    await expect.poll(() => harnessDot(chrome)).not.toBe('true')
-    await expect.poll(() => dockBadge(application!)).toBe(0)
+    await pollState(() => harnessDot(chrome)).not.toBe('true')
+    await pollState(() => dockBadge(application!)).toBe(0)
   } finally {
     await application?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
@@ -1005,11 +1016,11 @@ it('reports a running Harness update in a card the rest of the window outlives',
     // A user who asked for less motion gets a still mark: the card says the same
     // thing either way, and nothing about the transaction changes.
     await chrome.emulateMedia({ reducedMotion: 'reduce' })
-    await expect.poll(() => chrome.locator('.update-mark').evaluate(
+    await pollState(() => chrome.locator('.update-mark').evaluate(
       mark => getComputedStyle(mark).animationName,
     )).toBe('none')
     await chrome.emulateMedia({ reducedMotion: 'no-preference' })
-    await expect.poll(() => chrome.locator('.update-mark').evaluate(
+    await pollState(() => chrome.locator('.update-mark').evaluate(
       mark => getComputedStyle(mark).animationName,
     )).toBe('update-mark-life')
 
@@ -1020,12 +1031,12 @@ it('reports a running Harness update in a card the rest of the window outlives',
       collapse: { content: '"\u2212"', opacity: 0 },
     })
     await chrome.hover('.update-traffic')
-    await expect.poll(() => trafficGlyphs(chrome)).toEqual({
+    await pollState(() => trafficGlyphs(chrome)).toEqual({
       close: { content: '"\u00d7"', opacity: 1 },
       collapse: { content: '"\u2212"', opacity: 1 },
     })
     await chrome.locator('#update-stage').hover()
-    await expect.poll(() => trafficGlyphs(chrome)).toMatchObject({
+    await pollState(() => trafficGlyphs(chrome)).toMatchObject({
       close: { opacity: 0 },
       collapse: { opacity: 0 },
     })
@@ -1050,7 +1061,7 @@ it('reports a running Harness update in a card the rest of the window outlives',
     // The red control asks the transaction owner to cancel; the owner answers
     // with the question the card then shows.
     await chrome.locator('#update-traffic-close').click()
-    await expect.poll(() => harnessUpdateActions(application!)).toEqual(['cancel'])
+    await pollState(() => harnessUpdateActions(application!)).toEqual(['cancel'])
     await showHarnessUpdate(application, {
       phase: 'running',
       operation: 'update',
@@ -1060,11 +1071,11 @@ it('reports a running Harness update in a card the rest of the window outlives',
       confirming: true,
       collapsed: false,
     })
-    await expect.poll(() => chrome.locator('#update-stage').textContent())
+    await pollState(() => chrome.locator('#update-stage').textContent())
       .toBe('Cancel the Harness update?')
     expect(await chrome.locator('#update-actions').isVisible()).toBe(true)
     await chrome.locator('#update-confirm-cancel').click()
-    await expect.poll(() => harnessUpdateActions(application!))
+    await pollState(() => harnessUpdateActions(application!))
       .toEqual(['cancel', 'confirm-cancel'])
 
     // A step the runtime says it cannot interrupt takes the red control away and
@@ -1078,14 +1089,14 @@ it('reports a running Harness update in a card the rest of the window outlives',
       confirming: false,
       collapsed: false,
     })
-    await expect.poll(() => chrome.locator('#update-stage').textContent())
+    await pollState(() => chrome.locator('#update-stage').textContent())
       .toBe('Verifying the installation…')
     expect(await chrome.locator('#update-traffic-close').evaluate(
       light => light.dataset.uncancellable,
     )).toBe('true')
     // A step that cannot be interrupted must not preview a cancel it cannot do.
     await chrome.hover('.update-traffic')
-    await expect.poll(() => trafficGlyphs(chrome)).toMatchObject({
+    await pollState(() => trafficGlyphs(chrome)).toMatchObject({
       close: { opacity: 0 },
       collapse: { opacity: 1 },
     })
@@ -1105,7 +1116,7 @@ it('reports a running Harness update in a card the rest of the window outlives',
       confirming: false,
       collapsed: true,
     })
-    await expect.poll(async () => (await fixtureState(application!)).bounds.chrome?.width).toBe(164)
+    await pollState(async () => (await fixtureState(application!)).bounds.chrome?.width).toBe(164)
     expect(await chrome.locator('#harness-update').isVisible()).toBe(false)
 
     await showHarnessUpdate(application, {
@@ -1114,7 +1125,7 @@ it('reports a running Harness update in a card the rest of the window outlives',
       from: '0.1.0',
       to: '0.2.0',
     })
-    await expect.poll(() => chrome.locator('#update-stage').textContent()).toBe('Harness update installed')
+    await pollState(() => chrome.locator('#update-stage').textContent()).toBe('Harness update installed')
     expect(await chrome.locator('#update-note').textContent()).toBe('0.1.0 → 0.2.0')
     // What the card says is what is true: installed, and not yet what runs.
     expect(await chrome.locator('#update-effect').isVisible()).toBe(true)
@@ -1136,7 +1147,7 @@ it('reports a running Harness update in a card the rest of the window outlives',
       operation: 'reinstall',
       to: '0.2.0',
     })
-    await expect.poll(() => chrome.locator('#update-stage').textContent()).toBe('Harness reinstalled')
+    await pollState(() => chrome.locator('#update-stage').textContent()).toBe('Harness reinstalled')
     expect(await chrome.locator('#update-note').textContent()).toBe('0.2.0')
   } finally {
     await application?.close().catch(() => undefined)
