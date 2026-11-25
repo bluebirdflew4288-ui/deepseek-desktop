@@ -42,8 +42,9 @@ async function launch(userDataDirectory: string): Promise<ElectronApplication> {
   // Enable deterministic window state for this spec only; other specs that share
   // the dual-mode fixture keep the real BrowserWindow semantics.
   const deadline = Date.now() + 10_000
+  let simulationEnabled = false
   while (Date.now() < deadline) {
-    const enabled = await application.evaluate(() => {
+    simulationEnabled = await application.evaluate(() => {
       type FixtureGlobal = typeof globalThis & {
         __dshDualModeFixture?: { enableWindowSimulation?: () => void }
       }
@@ -52,8 +53,12 @@ async function launch(userDataDirectory: string): Promise<ElectronApplication> {
       fixture.enableWindowSimulation()
       return true
     })
-    if (enabled) break
+    if (simulationEnabled) break
     await new Promise((resolveWait) => { setTimeout(resolveWait, 50) })
+  }
+  if (!simulationEnabled) {
+    await application.close().catch(() => undefined)
+    throw new Error('dual-mode fixture did not expose window simulation within 10000ms')
   }
   return application
 }
