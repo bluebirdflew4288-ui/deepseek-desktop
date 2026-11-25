@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -335,10 +336,12 @@ function releaseQuit() {
 }
 
 async function boot() {
+  traceBoot('start')
   ;[harnessServer, chatServer] = await Promise.all([
     startFixtureServer('harness'),
     startFixtureServer('chat'),
   ])
+  traceBoot('servers')
   const chatSession = session.fromPartition(CHAT_PARTITION)
   desktopApplication = createDesktopApplication({
     notificationAdapter,
@@ -349,6 +352,7 @@ async function boot() {
     chromePreloadPath: join(DESKTOP_DIR, 'lib/mode-chrome-preload.cjs'),
     platform: process.platform,
     createWindow: options => {
+      traceBoot('create-window')
       // Hidden windows throttle their renderer on some platforms (timers and
       // stream reads stretch); the fixture drives whole flows while hidden, so
       // it keeps the renderer unthrottled.
@@ -385,6 +389,7 @@ async function boot() {
       win.minimize = simulateTransition('minimize', () => { simMinimized = true; simFocused = false }, base.minimize)
       win.restore = simulateTransition('restore', () => { simMinimized = false }, base.restore)
       fixtureWindows.push(win)
+      traceBoot('window-created')
       return win
     },
     createView: options => {
@@ -454,6 +459,7 @@ async function boot() {
     bringAllToFront: 'Bring All to Front',
   }, process.platform)
   Menu.setApplicationMenu(menu)
+  traceBoot('menu')
 }
 
 app.on('window-all-closed', () => {})
@@ -479,6 +485,16 @@ app.on('child-process-gone', (_event, details) => {
 process.on('uncaughtExceptionMonitor', error => {
   console.error('[dual-mode-app] uncaughtException', String(error))
 })
+// Boot breadcrumbs: a launch that never settles loses the console channel, so
+// the same trail goes to the test-owned file named by DSH_FIXTURE_BOOT_LOG.
+function traceBoot(step) {
+  console.error('[dual-mode-app] boot:' + step)
+  if (typeof process.env.DSH_FIXTURE_BOOT_LOG === 'string') {
+    try {
+      appendFileSync(process.env.DSH_FIXTURE_BOOT_LOG, step + '\n')
+    } catch (_ignored) { /* diagnostics only */ }
+  }
+}
 app.whenReady().then(boot).catch(async error => {
   console.error('dual-mode fixture startup failed:', error)
   await closeServers()

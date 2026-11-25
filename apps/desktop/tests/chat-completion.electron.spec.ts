@@ -23,10 +23,35 @@ interface ChatNotificationFixture {
 
 
 async function setForeground(application: ElectronApplication, on: boolean): Promise<void> {
-  await application.evaluate((_electron, value) => {
+  await boundedStep('setForeground', () => application.evaluate((_electron, value) => {
     const fixture = (globalThis as typeof globalThis & { __dshDualModeFixture: ChatNotificationFixture }).__dshDualModeFixture
     fixture.setForeground(value)
-  }, on)
+  }, on))
+}
+
+/**
+ * Run one fixture step with a bound: a stalled Electron main leaves an evaluate
+ * unsettled forever, and an unbounded step silently eats the whole test
+ * deadline. The bound turns that into an error naming the step.
+ * @param label - Step name surfaced in the timeout error.
+ * @param run - The awaited step.
+ * @param budgetMs - Bound for this step; defaults to 15 seconds.
+ * @returns The step's value.
+ */
+async function boundedStep<T>(label: string, run: () => Promise<T>, budgetMs = 15_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`chat fixture step '${label}' did not settle within ${String(budgetMs)}ms`))
+        }, budgetMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -81,11 +106,20 @@ async function removeUserData(directory: string): Promise<void> {
 
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
   assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
-  const application = await _electron.launch({
-    args: [fixtureRoot],
-    cwd: desktopRoot,
-    env: { ...process.env, DSH_DESKTOP_FIXTURE_USER_DATA: userDataDirectory },
-  })
+  const bootLog = join(userDataDirectory, 'boot.log')
+  let application: ElectronApplication
+  try {
+    application = await boundedStep('electron-launch', () => _electron.launch({
+      args: [fixtureRoot],
+      cwd: desktopRoot,
+      env: { ...process.env, DSH_DESKTOP_FIXTURE_USER_DATA: userDataDirectory, DSH_FIXTURE_BOOT_LOG: bootLog },
+    }), 60_000)
+  } catch (error) {
+    // A launch that never settles loses the console channel; the fixture keeps
+    // its boot trail in a file so the failure names the phase it stalled in.
+    const trail = await readFile(bootLog, 'utf8').catch(() => '(no boot log)')
+    throw new Error(`${String(error)}\n[dual-mode-app boot trail]\n${trail}`)
+  }
   // Surface the fixture app's crash telemetry (render-process-gone and friends)
   // in test output; playwright otherwise swallows the app console and a crashed
   // Chromium only shows up as a generic dead-page error.
@@ -146,7 +180,7 @@ async function openChat(application: ElectronApplication): Promise<{ chrome: Pag
 
 /** Drive one finished assistant turn through the Chat renderer itself. */
 async function finishChatReply(chat: Page, path = '/api/v0/chat/completion'): Promise<number> {
-  return await chat.evaluate(async (target) => {
+  return await boundedStep('finish-chat-reply', () => chat.evaluate(async (target) => {
     const response = await fetch(target, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -157,18 +191,18 @@ async function finishChatReply(chat: Page, path = '/api/v0/chat/completion'): Pr
     })
     const body = await response.text()
     return body.includes('[DONE]') ? response.status : -response.status
-  }, path)
+  }, path), 30_000)
 }
 
 async function notificationState(application: ElectronApplication) {
-  return await application.evaluate(() => {
+  return await boundedStep('notification-state', () => application.evaluate(() => {
     const fixture = (globalThis as typeof globalThis & { __dshDualModeFixture: ChatNotificationFixture }).__dshDualModeFixture
     return {
       count: fixture.notificationCount(),
       badge: fixture.badge(),
       last: fixture.lastNotification(),
     }
-  })
+  }))
 }
 
 /** Read the durable ledger, which is where both policies are recorded. */
@@ -201,7 +235,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => (await notificationState(application!)).count).toBe(1)
       const state = await notificationState(application)
@@ -267,7 +301,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
 
       // A POST that is not the completion endpoint must stay silent.
       await chat.evaluate(async () => { await fetch('/sidebar-click', { method: 'POST' }) })
@@ -319,7 +353,7 @@ describe('Chat completion notifications', () => {
       // Switch to Harness while the window is still visible, then hide it: a
       // hidden BrowserWindow has no stable/visible target for a synthetic click.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
       await pollState(async () => (await notificationState(application!)).count).toBe(1)
       // A second unseen regeneration raises the Dock number to two.
@@ -340,7 +374,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
 
       // A continuation that runs to completion is a finished answer.
       expect(await finishChatReply(chat, '/api/v0/chat/continue')).toBe(200)
@@ -378,17 +412,17 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chrome, chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => (await notificationState(application!)).count).toBe(1)
 
-      await application.evaluate(() => {
+      await boundedStep('click-notification', () => application!.evaluate(() => {
         (globalThis as typeof globalThis & { __dshDualModeFixture: ChatNotificationFixture }).__dshDualModeFixture.clickNotification()
-      })
-      await pollState(() => application!.evaluate(({ BrowserWindow }) => {
+      }))
+      await pollState(() => boundedStep('window-visibility', () => application!.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
         return window?.isVisible() === true && !window.isMinimized()
-      })).toBe(true)
+      }))).toBe(true)
       await pollState(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
       // Following the notification into Chat is an explicit entry, so the reminder clears.
       await pollState(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
@@ -405,7 +439,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chrome, chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
       await pollState(async () => (await notificationState(application!)).badge).toBe(1)
@@ -437,7 +471,7 @@ describe('Chat completion notifications', () => {
       // Leave Chat before the reply lands, so Harness is what stays on screen.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
       await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
 
@@ -469,7 +503,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
 
       // Start a completion and abort it after the first streamed chunk, the way a
       // user stopping generation does. A cancelled reply must not alert.
@@ -510,7 +544,7 @@ describe('Chat completion notifications', () => {
     try {
       application = await launch(directory)
       const { chat } = await openChat(application)
-      await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
+      await boundedStep('hide-window', () => application!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() }))
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => (await notificationState(application!)).count).toBe(1)
       await application.close()
