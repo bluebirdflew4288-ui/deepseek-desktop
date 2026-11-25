@@ -494,8 +494,13 @@ describe('worktree-local Lefthook installer', { timeout: 15_000 }, () => {
     expect(waiting.child.exitCode, waiting.stderr()).toBeNull()
     expect(readFileSync(`${lockPath}.faults`, 'utf8')).toContain('open')
 
-    // Release the way an owner does: close the held create, then unlink.
+    // Release the way an owner does: close the held create first, then unlink.
+    // The gap matters: the waiter's EPERM conversion and its corroborating
+    // lstat run in the waiter process, and an unlink landing between them would
+    // read as a genuine permission error. After the marker is gone no attempt
+    // can convert, so one poll interval later the unlink is race-free.
     rmSync(handleMarker, { force: true })
+    await new Promise(resolveWait => { setTimeout(resolveWait, 150) })
     rmSync(lockPath, { force: true })
     const result = await waiting.done
 
