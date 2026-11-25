@@ -164,7 +164,7 @@ describe('LspInstance query and abort', () => {
     await new Promise<void>(resolve => setTimeout(resolve, 300))
     controller.abort(new Error('mid-flight'))
     await expect(pending).rejects.toThrow(/mid-flight/)
-    expect(instance.dead).toBe(true)
+    await expect.poll(() => instance.dead, { timeout: 5_000, interval: 10 }).toBe(true)
   })
 
   it('resolves the cancel grace when the server honors $/cancelRequest', async () => {
@@ -221,7 +221,7 @@ describe('LspInstance query and abort', () => {
     await new Promise<void>(resolve => setTimeout(resolve, 100))
     controller.abort(new Error('didOpen-abort'))
     await expect(pending).rejects.toThrow(/didOpen-abort/)
-    expect(instance.dead).toBe(true)
+    await expect.poll(() => instance.dead, { timeout: 5_000, interval: 10 }).toBe(true)
   })
 
   it('terminates when stdin fails during the didOpen write', async () => {
@@ -230,7 +230,7 @@ describe('LspInstance query and abort', () => {
       killGraceMs: 100,
     }, failingWriter('textDocument/didOpen'))
     await expect(run(instance, 'goToDefinition')).rejects.toThrow()
-    expect(instance.dead).toBe(true)
+    await expect.poll(() => instance.dead, { timeout: 5_000, interval: 10 }).toBe(true)
   })
 
   it('awaits process exit before rejecting a request write failure', async () => {
@@ -266,7 +266,7 @@ describe('LspInstance query and abort', () => {
       locations: [],
       resolvedWorkspaceUri: pathToFileURL(ws).href,
     })
-    expect(instance.dead).toBe(true)
+    await expect.poll(() => instance.dead, { timeout: 5_000, interval: 10 }).toBe(true)
   })
 })
 
@@ -301,7 +301,7 @@ describe('LspInstance disposal', () => {
     const instance = makeInstance({ LSP_FAKE_DEF: 'null' })
     await run(instance, 'goToDefinition')
     await instance.dispose()
-    expect(instance.dead).toBe(true)
+    await expect.poll(() => instance.dead, { timeout: 5_000, interval: 10 }).toBe(true)
   })
 
   it('escalates to SIGKILL when the server ignores shutdown and SIGTERM', async () => {

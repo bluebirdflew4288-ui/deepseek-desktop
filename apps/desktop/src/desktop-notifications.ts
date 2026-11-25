@@ -2,7 +2,7 @@
 import type { DesktopMode } from './desktop-mode.ts'
 
 /** User-level outcomes; execution state remains owned by the task provider. */
-export type TaskNotificationKind = 'completed' | 'failed' | 'action-required'
+type TaskNotificationKind = 'completed' | 'failed' | 'action-required'
 /** A provider must supply a stable occurrence id and assert top-level ownership. */
 export interface DesktopTaskEvent {
   readonly id: string
@@ -15,7 +15,7 @@ export interface DesktopTaskEvent {
   readonly presentation?: 'background-only'
 }
 /** Delivery records do not imply that the user read an event. */
-export interface DesktopUnreadEvent extends DesktopTaskEvent {
+interface DesktopUnreadEvent extends DesktopTaskEvent {
   readonly read: boolean
   readonly delivery: 'pending' | 'attempted' | 'disabled' | 'unavailable'
 }
@@ -165,7 +165,7 @@ export function parseNotificationState(value: unknown): DesktopNotificationState
  * @param view - Current positive visibility evidence.
  * @returns Whether this specific target is being viewed.
  */
-export function isTaskViewed(event: DesktopTaskEvent, view: DesktopTaskVisibility): boolean {
+function isTaskViewed(event: DesktopTaskEvent, view: DesktopTaskVisibility): boolean {
   return view.focused && view.visible && !view.minimized && view.source === event.source
     && event.targetId !== undefined && event.targetId === view.targetId
 }

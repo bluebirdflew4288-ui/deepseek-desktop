@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { assertDevelopmentToolLaunchers, developmentLauncherOptions, developmentLauncherScripts, placeDevelopmentToolLaunchers } from '../src/development-tool-launchers.ts'
 import { harnessHostEnvironment } from '../src/harness-host-environment.ts'
+import { runManagedProcess } from '../src/managed-harness-process.ts'
 
 const run = promisify(execFile)
 const desktop = resolve(import.meta.dirname, '..')
@@ -13,6 +14,17 @@ const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 async function directory(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dsh development tools-'))
+  roots.push(root)
+  return root
+}
+// Windows temp is on C: while the checked-out Electron and bundled npm live on
+// the repository's build drive. Windows cannot express a relative path across
+// drives, so a launcher staged under C:\ would embed an absolute D:\ target that
+// cmd rejects with ERROR_INVALID_NAME (exit 123). Stage on the repo drive instead
+// so the Windows launchers exercise the same same-drive relative targets real
+// packaging produces.
+async function repositoryDriveDirectory(): Promise<string> {
+  const root = await mkdtemp(join(desktop, 'node_modules', '.dsh development tools-'))
   roots.push(root)
   return root
 }
@@ -131,12 +143,20 @@ describe('Desktop development commands', () => {
   })
 
   it.runIf(process.platform === 'win32')('runs Windows shell commands against Electron without system Node', async () => {
-    const root = await directory()
+    const root = await repositoryDriveDirectory()
     const options = developmentLauncherOptions(join(root, 'bin'), electron, join(desktop, 'runtime-npm/npm'))
     await placeDevelopmentToolLaunchers(options)
     const env = harnessHostEnvironment(process.env, {}, options.directory, {})
     env.PATH = options.directory
-    const output = await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'node -p "Boolean(process.versions.electron)" && npm --version && npx --version'], { env, cwd: root })
-    expect(output.stdout.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
+    // Use the same shell-free spawn path as the packaged runtime probe; execFile
+    // re-quotes the compound command and cmd exits with a filename syntax error.
+    const outcome = await runManagedProcess({
+      command: process.env.ComSpec ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', 'node -p !!process.versions.electron && npm --version && npx --version'],
+      env,
+      timeoutMs: 20_000,
+    })
+    expect(outcome.exitCode, `output: ${JSON.stringify(outcome.output)}`).toBe(0)
+    expect(outcome.output.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
   }, 20_000)
 })

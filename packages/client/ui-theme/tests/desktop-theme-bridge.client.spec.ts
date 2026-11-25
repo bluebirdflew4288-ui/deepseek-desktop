@@ -65,4 +65,16 @@ describe('desktop ThemeRuntime bridge', () => {
     receive('dark')
     expect(theme.getTheme().preference).toBe('system')
   })
+
+  it('no-ops when the embedded renderer exposes no desktop bridge', () => {
+    // Embedded flag set but window.dshDesktopTheme absent: the bridge must not
+    // throw and must not subscribe.
+    document.documentElement.dataset.dshDesktopEmbedded = 'true'
+    delete (window as { dshDesktopTheme?: unknown }).dshDesktopTheme
+    const ctx = new Context()
+    const host = stubSettingsScope<ThemeSettings>()
+    const theme = new ThemeRuntime(ctx, host.scope)
+    expect(() => { bindDesktopThemeBridge(ctx, theme) }).not.toThrow()
+    expect(theme.getTheme().preference).toBe('system')
+  })
 })

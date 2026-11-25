@@ -96,7 +96,9 @@ function repositoryState(root: string): Record<string, string> {
   }
 }
 
-describe('change-scope', () => {
+// Every case builds a multi-repository git fixture (init, config, commit, push);
+// hosted runners exceed vitest's five-second default inside that setup alone.
+describe('change-scope', { timeout: 20_000 }, () => {
   it('uses an explicit base on a fresh branch without a same-name remote and after its first push', { timeout: 20_000 }, () => {
     const { root } = fixture()
     git(root, ['switch', '-c', 'feature'])

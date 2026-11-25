@@ -18,7 +18,7 @@ Ordinary subscribed pull-request events remain forward-only implementation signa
 
 The handler resolves only exact same-repository `Fixes`, `Closes`, or `Resolves` references. It does not alter terminal statuses, add an Issue with no Project status, depend on PR metadata validity, query `reviewDecision`, reconstruct review rounds, look up pull requests from Issues, or run a scheduled reconciler.
 
-[Issue lifecycle](../../../../.github/workflows/issue-lifecycle.yml) remains unsubscribed from `pull_request.ready_for_review`; neither event command depends on that action. [Issue policy](../../../../.github/workflows/issue-policy.yml) retains `ready_for_review` because it owns required-check enforcement when a human pull request enters review.
+The original `issue-lifecycle.yml` workflow did not subscribe to `pull_request.ready_for_review`; neither event command depended on that action. The former `issue-policy.yml` workflow handled `ready_for_review` to enforce required checks when a human pull request entered review. Both workflows are absent from this public repository; these descriptions preserve their former behavior.
 
 ## Verification
 

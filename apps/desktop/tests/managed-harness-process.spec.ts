@@ -41,6 +41,38 @@ function run(
   })
 }
 
+/**
+ * Await the child's `handler-ready` line with a bounded timeout. If the child
+ * exits or never installs its SIGTERM handler, abort it and settle `pending` so
+ * the test fails fast instead of hanging on an unresolved promise.
+ * @param installed - resolves when the handler-ready line is seen.
+ * @param controller - aborts the child on failure.
+ * @param pending - the running child outcome, awaited during cleanup.
+ * @param timeoutMs - readiness deadline.
+ */
+async function awaitHandlerReady(
+  installed: Promise<void>,
+  controller: AbortController,
+  pending: Promise<ManagedProcessOutcome>,
+  timeoutMs = 15_000,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      installed,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => { reject(new Error(`Child did not report handler-ready within ${timeoutMs}ms`)) }, timeoutMs)
+      }),
+    ])
+  } catch (error) {
+    controller.abort()
+    await pending.catch(() => {})
+    throw error
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** Resolve only after the parent has received the child's PID line. */
 function pidLineReadiness(): { readonly ready: Promise<void>; readonly onOutput: (chunk: string) => void } {
   let resolveReady!: () => void
@@ -103,13 +135,23 @@ describe('managed Harness child process runner', () => {
 
   it.skipIf(process.platform === 'win32')('never escalates a child that honors SIGTERM', async () => {
     const controller = new AbortController()
-    const readiness = pidLineReadiness()
+    // Gate on handler installation (see the escalation test): the PID line can
+    // arrive before the SIGTERM handler is registered, and an early signal would
+    // take the default action. Write "graceful" synchronously so process.exit(0)
+    // cannot drop a buffered console.log.
+    let markHandlerReady = (): void => {}
+    const handlerInstalled = new Promise<void>((resolve) => { markHandlerReady = resolve })
     const pending = run(
-      'process.on("SIGTERM", () => { console.log("graceful"); process.exit(0) });'
+      'process.on("SIGTERM", () => { require("node:fs").writeSync(1, "graceful\\n"); process.exit(0) });'
+      + 'require("node:fs").writeSync(1, "handler-ready\\n");'
       + `setTimeout(() => {}, ${String(SELF_LIMIT_MS)});`,
-      { signal: controller.signal, onOutput: readiness.onOutput },
+      {
+        signal: controller.signal,
+        onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
+      },
     )
-    try { await readiness.ready } finally { controller.abort() }
+    await awaitHandlerReady(handlerInstalled, controller, pending)
+    controller.abort()
     const outcome = await pending
 
     // The handler's own line and a voluntary exit are the proof: a killed child
@@ -122,17 +164,22 @@ describe('managed Harness child process runner', () => {
 
   it.skipIf(process.platform === 'win32')('escalates to SIGKILL one grace period after an ignored SIGTERM', { timeout: 40_000 }, async () => {
     const controller = new AbortController()
-    const readiness = pidLineReadiness()
+    // Wait for the child to confirm its SIGTERM handler is installed before
+    // signalling: the shared `run()` writes the PID before `${script}`, so the
+    // PID line alone can arrive while the handler is not yet registered, and an
+    // early SIGTERM would take the default action (no "ignored" line).
+    let markHandlerReady = (): void => {}
+    const handlerInstalled = new Promise<void>((resolve) => { markHandlerReady = resolve })
     const pending = run(
-      'process.on("SIGTERM", () => { console.log("ignored"); });'
+      'process.on("SIGTERM", () => { require("node:fs").writeSync(1, "ignored\\n"); });'
+      + 'require("node:fs").writeSync(1, "handler-ready\\n");'
       + `setTimeout(() => {}, ${String(SELF_LIMIT_MS)});`,
-      { signal: controller.signal, onOutput: readiness.onOutput },
+      {
+        signal: controller.signal,
+        onOutput: (chunk) => { if (chunk.includes('handler-ready')) markHandlerReady() },
+      },
     )
-    try { await readiness.ready } catch (error) {
-      controller.abort()
-      await pending
-      throw error
-    }
+    await awaitHandlerReady(handlerInstalled, controller, pending)
     const started = Date.now()
     controller.abort()
     const outcome = await pending

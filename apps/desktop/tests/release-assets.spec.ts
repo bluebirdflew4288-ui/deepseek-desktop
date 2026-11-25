@@ -182,8 +182,8 @@ describe('desktop release asset manifests', () => {
         return hashFile(path)
       },
       upload: (_repo, _requestedTag, path) => {
-        events.push(`upload:${path.split('/').at(-1)}`)
-        remoteAssets.push({ name: path.split('/').at(-1)! })
+        events.push(`upload:${path.split(/[\\/]/u).at(-1)}`)
+        remoteAssets.push({ name: path.split(/[\\/]/u).at(-1)! })
       },
       publish: (_repo, releaseId, body) => {
         events.push('publish')

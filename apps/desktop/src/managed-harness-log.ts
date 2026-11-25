@@ -35,10 +35,10 @@ const HOST_PACKAGES = [
 ] as const
 
 /** Outcome of one health check. */
-export type ManagedHarnessHealth = 'pass' | 'fail'
+type ManagedHarnessHealth = 'pass' | 'fail'
 
 /** One recorded operation fact. Every field is named here, so nothing else can enter the log. */
-export interface ManagedHarnessLogEntry {
+interface ManagedHarnessLogEntry {
   /** ISO-8601 time the fact was recorded. */
   readonly time: string
   /** Operation the desktop performed. */
@@ -168,7 +168,7 @@ export function createManagedHarnessDiagnostics(options: ManagedHarnessDiagnosti
       await ensureSafeDirectoryTree(dirname(options.file), trustedAnchor)
       await assertSafeRegularFile(options.file, trustedAnchor, true)
       await assertSafeRegularFile(backup, trustedAnchor, true)
-      const size = await lstat(options.file).then(metadata => metadata.size, (error) => {
+      const size = await lstat(options.file).then(metadata => metadata.size, (error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
         throw error
       })

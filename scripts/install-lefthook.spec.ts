@@ -14,7 +14,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { removeFixtureSafely, unlinkFixtureLinks } from './test-fixture-cleanup.ts'
 
@@ -211,6 +211,125 @@ function runInstaller(
   })
 }
 
+/**
+ * Node preload emulating the Windows held-lock file contract for the installer
+ * lock, so the EPERM classification paths run on every platform.
+ * Mode `open`: an exclusive create over the still-open lock fails EPERM instead
+ * of EEXIST and the open lock cannot be unlinked (marker file = open handle).
+ * Mode `write`: the owner-record write fails EPERM after the create succeeded.
+ * @returns The generated preload source.
+ */
+function windowsLockFaultShimSource(): string {
+  return `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+
+const LOCK_NAME = 'dsh-lefthook-install.lock'
+const mode = process.env.DSH_TEST_LEFTHOOK_WIN_LOCK_FAULT
+const isLock = target => typeof target === 'string' && target.endsWith(LOCK_NAME)
+const markerOf = target => target + '.handle-open'
+const eperm = (syscall, target) => {
+  const error = new Error('EPERM: operation not permitted, ' + syscall + ' ' + target)
+  error.code = 'EPERM'
+  error.syscall = syscall
+  error.path = target
+  return error
+}
+const real = { open: fs.openSync, close: fs.closeSync, unlink: fs.unlinkSync, write: fs.writeFileSync }
+
+if (mode === 'open') {
+  let heldFd = null
+  let heldPath = null
+  fs.openSync = function (target, flags, ...rest) {
+    let fd
+    try {
+      fd = real.open.call(fs, target, flags, ...rest)
+    } catch (error) {
+      if (isLock(target) && String(flags).includes('x') && error.code === 'EEXIST' && fs.existsSync(markerOf(target))) {
+        real.write.call(fs, target + '.faults', 'open\\n', { flag: 'a' })
+        throw eperm('open', target)
+      }
+      throw error
+    }
+    if (isLock(target)) {
+      heldFd = fd
+      heldPath = target
+      real.write.call(fs, markerOf(target), String(process.pid))
+    }
+    return fd
+  }
+  fs.closeSync = function (fd) {
+    if (fd === heldFd) {
+      heldFd = null
+      const marker = markerOf(heldPath)
+      heldPath = null
+      try {
+        real.unlink.call(fs, marker)
+      } catch (markerError) {
+        if (markerError.code !== 'ENOENT') throw markerError
+      }
+    }
+    return real.close.call(fs, fd)
+  }
+  // Windows cannot delete a file whose handle is still open.
+  fs.unlinkSync = function (target) {
+    if (isLock(target) && fs.existsSync(markerOf(target))) throw eperm('unlink', target)
+    return real.unlink.call(fs, target)
+  }
+} else if (mode === 'write') {
+  fs.writeFileSync = function (target, data, ...rest) {
+    if (typeof target === 'number' && /^[1-9]\\d* [0-9a-f-]{36}\\n$/i.test(String(data))) {
+      throw eperm('write', 'owner-record')
+    }
+    return real.write.call(fs, target, data, ...rest)
+  }
+}
+
+syncBuiltinESMExports()
+`
+}
+
+/**
+ * Place the Windows lock-fault preload inside the fixture.
+ * @param fixture - Fixture whose container owns the preload file.
+ * @returns The preload path, for NODE_OPTIONS.
+ */
+function writeWindowsLockFaultShim(fixture: Fixture): string {
+  const shim = join(fixture.container, 'windows-lock-fault-shim.mjs')
+  write(shim, windowsLockFaultShimSource())
+  return shim
+}
+
+/** One installer child plus its settled result, observed while it runs. */
+interface LiveInstaller {
+  child: ReturnType<typeof spawn>
+  stderr: () => string
+  done: Promise<CommandResult>
+}
+
+/**
+ * Spawn one installer without waiting, so a test can observe it mid-flight.
+ * @param fixture - Fixture whose environment the installer inherits.
+ * @param root - Worktree the installer treats as its own.
+ * @param extraEnv - Environment overrides for this installer.
+ * @returns The live child, its partial stderr, and the settled result.
+ */
+function spawnInstaller(fixture: Fixture, root: string, extraEnv: NodeJS.ProcessEnv = {}): LiveInstaller {
+  const child = spawn(process.execPath, [installer], {
+    cwd: root,
+    env: { ...fixture.env, ...extraEnv },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+  child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+  const done = new Promise<CommandResult>((resolveResult, reject) => {
+    child.on('error', reject)
+    child.on('close', (status) => { resolveResult({ status, stderr, stdout }) })
+  })
+  return { child, stderr: () => stderr, done }
+}
+
 describe('worktree-local Lefthook installer', { timeout: 15_000 }, () => {
   for (const [label, extraEnv] of [
     ['CI', { CI: 'true' }],
@@ -353,6 +472,57 @@ describe('worktree-local Lefthook installer', { timeout: 15_000 }, () => {
     for (const result of results) expect(result.status, result.stderr).toBe(0)
     expect(existsSync(lockPath)).toBe(false)
   })
+
+  it('waits out a Windows-style EPERM on a held exclusive lock create', async () => {
+    const fixture = createFixture()
+    const lockPath = installLockPath(fixture)
+    const shim = writeWindowsLockFaultShim(fixture)
+    // The test plays the publishing installer: an owned record with a live
+    // owner plus the still-open create handle the preload models with a marker
+    // file — the window Windows reports as EPERM instead of EEXIST.
+    writeFileSync(lockPath, `${String(process.pid)} 11111111-2222-3333-4444-555555555555\n`)
+    const handleMarker = `${lockPath}.handle-open`
+    writeFileSync(handleMarker, String(process.pid))
+
+    const waiting = spawnInstaller(fixture, fixture.linked, {
+      DSH_TEST_LEFTHOOK_WIN_LOCK_FAULT: 'open',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(shim).href}`].filter(Boolean).join(' '),
+    })
+    // The waiter must collide with the held create and survive it inside the
+    // wait loop; a misclassified EPERM aborts the installer before this point.
+    await new Promise(resolveWait => setTimeout(resolveWait, 800))
+    expect(waiting.child.exitCode, waiting.stderr()).toBeNull()
+    expect(readFileSync(`${lockPath}.faults`, 'utf8')).toContain('open')
+
+    // Release the way an owner does: close the held create first, then unlink.
+    // The gap matters: the waiter's EPERM conversion and its corroborating
+    // lstat run in the waiter process, and an unlink landing between them would
+    // read as a genuine permission error. After the marker is gone no attempt
+    // can convert, so one poll interval later the unlink is race-free.
+    rmSync(handleMarker, { force: true })
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 150) })
+    rmSync(lockPath, { force: true })
+    const result = await waiting.done
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(lockPath)).toBe(false)
+  }, MULTI_PROCESS_TEST_TIMEOUT_MS)
+
+  it('propagates an owner-record write failure instead of treating it as contention', async () => {
+    const fixture = createFixture()
+    const shim = writeWindowsLockFaultShim(fixture)
+    const result = await runInstaller(fixture, fixture.main, {
+      DSH_TEST_LEFTHOOK_WIN_LOCK_FAULT: 'write',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(shim).href}`].filter(Boolean).join(' '),
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('EPERM')
+    // The create already succeeded here, so this EPERM is a real failure to
+    // surface; contention misclassification would replace it with an installer
+    // lock recovery message after the initialization timeout.
+    expect(result.stderr).not.toContain('Lefthook installer lock')
+  }, MULTI_PROCESS_TEST_TIMEOUT_MS)
 
   it('repairs its owned absolute hook path after the checkout moves', async () => {
     const fixture = createFixture()

@@ -7,7 +7,11 @@
         config:
           baseURL: !!js process.env.DSH_SNAPSHOT_BASE_URL
           thinking: disabled
-          streamIdleTimeoutMs: 150
+          # Wide enough that CI scheduling jitter in the mock's first byte cannot
+          # trip the idle watchdog, yet far below the mock's no-comment data delay
+          # (see deepseekDefaultsServer) so a regression that stopped resetting the
+          # idle timer on SSE comments would still time out.
+          streamIdleTimeoutMs: 500
       - id: agent-spine
         config:
           agents:

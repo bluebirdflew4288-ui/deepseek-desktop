@@ -27,8 +27,24 @@ export async function assertPackagedDevelopmentTools(resources: string, executab
     env, timeoutMs: 30_000,
   })
   const [actualNode, npm, npx] = outcome.output.trim().split(/\r?\n/u)
-  if (outcome.exitCode !== 0 || outcome.outputTruncated || actualNode === undefined
-    || await realpath(actualNode) !== await realpath(executable) || npm !== npmVersion || npx !== npmVersion) {
-    throw new Error('Packaged Desktop node/npm/npx commands failed runtime ownership verification')
+  const ownsRuntime = actualNode !== undefined
+    && await realpath(actualNode)
+      .then(reported => realpath(executable).then(expected => reported === expected))
+      .catch(() => false)
+  if (outcome.exitCode !== 0 || outcome.outputTruncated || !ownsRuntime || npm !== npmVersion || npx !== npmVersion) {
+    // Keep the ownership equality above authoritative; the diagnostic only names
+    // what the packaged commands actually reported so a broken fixture or a real
+    // packaging defect is distinguishable without weakening the check.
+    const diagnostic = [
+      `exitCode=${String(outcome.exitCode)}`,
+      `outputTruncated=${String(outcome.outputTruncated ?? false)}`,
+      `expectedExecutable=${executable}`,
+      `reportedExecPath=${actualNode ?? '<none>'}`,
+      `expectedNpmVersion=${npmVersion}`,
+      `reportedNpm=${npm ?? '<none>'}`,
+      `reportedNpx=${npx ?? '<none>'}`,
+      `output=${JSON.stringify(outcome.output.slice(-1024))}`,
+    ].join('; ')
+    throw new Error(`Packaged Desktop node/npm/npx commands failed runtime ownership verification (${diagnostic})`)
   }
 }

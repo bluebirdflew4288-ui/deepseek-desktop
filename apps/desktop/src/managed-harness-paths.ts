@@ -21,7 +21,7 @@ const DIRECTORIES = {
 } as const
 
 /** Diagnostic log file name inside the managed log directory. */
-export const MANAGED_HARNESS_LOG_NAME = 'managed-harness.log'
+const MANAGED_HARNESS_LOG_NAME = 'managed-harness.log'
 
 /**
  * Resolved locations of every artifact the managed Harness owns.

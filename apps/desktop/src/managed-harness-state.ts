@@ -11,7 +11,7 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { isManagedHarnessVersionName } from './managed-harness-paths.ts'
 
 /** Document version written by this build. */
-export const MANAGED_HARNESS_STATE_VERSION = 1
+const MANAGED_HARNESS_STATE_VERSION = 1
 
 /** Transaction the state file can be mid-way through. */
 export type ManagedHarnessOperation = 'install' | 'update' | 'reinstall' | 'rollback'
@@ -20,7 +20,7 @@ export type ManagedHarnessOperation = 'install' | 'update' | 'reinstall' | 'roll
 const OPERATIONS = new Set<ManagedHarnessOperation>(['install', 'update', 'reinstall', 'rollback'])
 
 /** In-flight transaction recovered after an interrupted run. */
-export interface ManagedHarnessPending {
+interface ManagedHarnessPending {
   /** Transaction that had not completed when the application stopped. */
   readonly operation: ManagedHarnessOperation
   /** Version that transaction was preparing. */
@@ -44,7 +44,7 @@ export interface ManagedHarnessState {
 }
 
 /** State asserting that no program version has been promoted yet. */
-export const EMPTY_MANAGED_HARNESS_STATE: ManagedHarnessState = Object.freeze({})
+const EMPTY_MANAGED_HARNESS_STATE: ManagedHarnessState = Object.freeze({})
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

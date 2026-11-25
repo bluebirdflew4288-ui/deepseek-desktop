@@ -149,7 +149,7 @@ export interface DesktopApplicationOptions {
 }
 
 /** Attached-view operations available to an injected Harness fixture adapter. */
-export interface DesktopHarnessSurfaceFactoryOptions {
+interface DesktopHarnessSurfaceFactoryOptions {
   readonly createView: DesktopApplicationOptions['createView']
   readonly removeView: (view: WebContentsView) => void
   readonly onFailure: (error: Error) => void
@@ -159,7 +159,7 @@ export interface DesktopHarnessSurfaceFactoryOptions {
 }
 
 /** Attached-view operations available to an injected Chat fixture adapter. */
-export interface DesktopChatSurfaceFactoryOptions {
+interface DesktopChatSurfaceFactoryOptions {
   readonly createView: DesktopApplicationOptions['createView']
   readonly removeView: (view: WebContentsView) => void
   readonly onExternalNavigation: (url: string) => void
