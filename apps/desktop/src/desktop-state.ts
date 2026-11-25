@@ -91,11 +91,39 @@ export async function loadDesktopState(filename: string): Promise<DesktopState> 
 }
 
 /**
- * Persist the complete state using an owner-only atomic file replacement.
+ * How long one durable state write outlasts transient operating-system file
+ * failures before giving up. Windows releases file handles asynchronously
+ * (antivirus and exiting child processes hold freshly written files), and one
+ * failed atomic replacement would silently drop a notification receipt the
+ * caller has already accepted. `DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS` narrows
+ * the window for tests.
+ */
+const SAVE_RETRY_WINDOW_MS = 60_000
+const SAVE_RETRY_DELAY_MS = 250
+
+/**
+ * Whether one write failed because the operating system was still holding the
+ * file, the only failure worth retrying. Anything else — a real permission
+ * error, a missing parent, a full disk — propagates on the first attempt.
+ */
+function isTransientSaveFailure(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EMFILE' || code === 'ENFILE'
+}
+
+/**
+ * Persist the complete state using an owner-only atomic file replacement,
+ * retrying transient operating-system file failures inside a bounded window.
  * @param filename - JSON file receiving the persisted desktop state.
  * @param state - the whole state; every field is written, so nothing is dropped.
+ * @param write - the atomic replacement; injectable so tests can fail it.
+ * @returns Completion once the replacement landed or the failure propagated.
  */
-export async function saveDesktopState(filename: string, state: DesktopState): Promise<void> {
+export async function saveDesktopState(
+  filename: string,
+  state: DesktopState,
+  write: (target: string, content: string, options: { mode: number; dirMode: number }) => Promise<void> = writeFileAtomic,
+): Promise<void> {
   const document: DesktopStateDocumentV1 | DesktopStateDocumentV2 = {
     version: STATE_VERSION,
     mode: state.mode,
@@ -103,7 +131,18 @@ export async function saveDesktopState(filename: string, state: DesktopState): P
     ...state.locale === undefined ? {} : { locale: state.locale },
     ...state.notifications === undefined ? {} : { notifications: state.notifications },
   }
-  await writeFileAtomic(filename, `${JSON.stringify(document)}\n`, { mode: 0o600, dirMode: 0o700 })
+  const content = `${JSON.stringify(document)}\n`
+  const retryWindowMs = Number(process.env.DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS ?? '') || SAVE_RETRY_WINDOW_MS
+  const deadline = Date.now() + retryWindowMs
+  while (true) {
+    try {
+      await write(filename, content, { mode: 0o600, dirMode: 0o700 })
+      return
+    } catch (error) {
+      if (!isTransientSaveFailure(error) || Date.now() >= deadline) throw error
+      await new Promise((resolveWait) => { setTimeout(resolveWait, SAVE_RETRY_DELAY_MS) })
+    }
+  }
 }
 
 function requireNotifications(value: unknown): DesktopNotificationState {
