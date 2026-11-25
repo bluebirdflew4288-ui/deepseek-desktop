@@ -425,16 +425,23 @@ async function boot() {
     ),
     // The fixture's own origin stands in for the audited Chat completion endpoint,
     // so the real observer wiring is exercised without reaching the real website.
+    // The observer calls these matchers from both its start and its completion
+    // listener; the trace therefore separates "the request never reached
+    // webRequest", "the completion was never detected", and a state-logic drop.
     chatCompletionMatch: url => {
       try {
-        return CHAT_COMPLETION_PATHS.includes(new URL(url).pathname)
+        const matched = CHAT_COMPLETION_PATHS.includes(new URL(url).pathname)
+        traceBoot('match ' + (matched ? 'hit' : 'miss') + ' ' + String(url))
+        return matched
       } catch {
         return false
       }
     },
     chatCompletionStopMatch: url => {
       try {
-        return new URL(url).pathname === CHAT_STOP_PATH
+        const matched = new URL(url).pathname === CHAT_STOP_PATH
+        if (matched) traceBoot('match stop ' + String(url))
+        return matched
       } catch {
         return false
       }
