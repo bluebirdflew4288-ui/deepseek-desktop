@@ -17,6 +17,17 @@ async function directory(): Promise<string> {
   roots.push(root)
   return root
 }
+// Windows temp is on C: while the checked-out Electron and bundled npm live on
+// the repository's build drive. Windows cannot express a relative path across
+// drives, so a launcher staged under C:\ would embed an absolute D:\ target that
+// cmd rejects with ERROR_INVALID_NAME (exit 123). Stage on the repo drive instead
+// so the Windows launchers exercise the same same-drive relative targets real
+// packaging produces.
+async function repositoryDriveDirectory(): Promise<string> {
+  const root = await mkdtemp(join(desktop, 'node_modules', '.dsh development tools-'))
+  roots.push(root)
+  return root
+}
 const electron = process.platform === 'darwin'
   ? join(desktop, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
   : join(desktop, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : 'electron')
@@ -132,7 +143,7 @@ describe('Desktop development commands', () => {
   })
 
   it.runIf(process.platform === 'win32')('runs Windows shell commands against Electron without system Node', async () => {
-    const root = await directory()
+    const root = await repositoryDriveDirectory()
     const options = developmentLauncherOptions(join(root, 'bin'), electron, join(desktop, 'runtime-npm/npm'))
     await placeDevelopmentToolLaunchers(options)
     const env = harnessHostEnvironment(process.env, {}, options.directory, {})
@@ -145,7 +156,7 @@ describe('Desktop development commands', () => {
       env,
       timeoutMs: 20_000,
     })
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode, `output: ${JSON.stringify(outcome.output)}`).toBe(0)
     expect(outcome.output.trim().split(/\r?\n/u)).toEqual(['true', '11.12.1', '11.12.1'])
   }, 20_000)
 })
