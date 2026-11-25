@@ -500,7 +500,7 @@ describe('worktree-local Lefthook installer', { timeout: 15_000 }, () => {
     // read as a genuine permission error. After the marker is gone no attempt
     // can convert, so one poll interval later the unlink is race-free.
     rmSync(handleMarker, { force: true })
-    await new Promise(resolveWait => { setTimeout(resolveWait, 150) })
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 150) })
     rmSync(lockPath, { force: true })
     const result = await waiting.done
 
