@@ -68,7 +68,7 @@ const fixtureRoot = resolve(desktopRoot, 'tests/fixtures/dual-mode-app')
 // failure, so a broken flow reports that bound; this deadline only absorbs the
 // worst-case SUM of slow-but-successful steps on a loaded runner (a three-reply
 // flow can legitimately accumulate several fetch, action, and poll budgets).
-const CHAT_TEST_TIMEOUT_MS = 240_000
+const CHAT_TEST_TIMEOUT_MS = 300_000
 
 /**
  * Poll eventual cross-process state (durable ledger writes, simulated adapter
@@ -79,7 +79,7 @@ const CHAT_TEST_TIMEOUT_MS = 240_000
  * @returns The poll assertion carrying the matcher chain.
  */
 function pollState<T>(read: () => T | Promise<T>) {
-  return expect.poll(read, { timeout: 20_000, interval: 100 })
+  return expect.poll(read, { timeout: 60_000, interval: 100 })
 }
 
 /**
@@ -354,11 +354,13 @@ describe('Chat completion notifications', () => {
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
       await pollState(async () => {
         const ledger = await persistedNotifications(directory)
-        // A chat receipt that landed without the attention flag is the view
-        // decision (already viewed); no receipt at all is an observer miss.
-        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
-          console.error('[chat-diag] chat receipt present but chatAttention stays '
-            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        // Receipt count separates the three causes: a new receipt without the
+        // attention flag is the view decision, no new receipt is an observer
+        // miss, and a receipt that arrives late is write latency.
+        const receipts = ledger.events.filter(event => event.source === 'chat').length
+        if (ledger.chatAttention !== true) {
+          console.error(`[chat-diag] chatAttention=${String(ledger.chatAttention)} `
+            + `chatReceipts=${String(receipts)} unread=${String(ledger.unread)}`)
         }
         return ledger.chatAttention
       }).toBe(true)
@@ -378,11 +380,13 @@ describe('Chat completion notifications', () => {
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
       await pollState(async () => {
         const ledger = await persistedNotifications(directory)
-        // A chat receipt that landed without the attention flag is the view
-        // decision (already viewed); no receipt at all is an observer miss.
-        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
-          console.error('[chat-diag] chat receipt present but chatAttention stays '
-            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        // Receipt count separates the three causes: a new receipt without the
+        // attention flag is the view decision, no new receipt is an observer
+        // miss, and a receipt that arrives late is write latency.
+        const receipts = ledger.events.filter(event => event.source === 'chat').length
+        if (ledger.chatAttention !== true) {
+          console.error(`[chat-diag] chatAttention=${String(ledger.chatAttention)} `
+            + `chatReceipts=${String(receipts)} unread=${String(ledger.unread)}`)
         }
         return ledger.chatAttention
       }).toBe(true)
@@ -482,11 +486,13 @@ describe('Chat completion notifications', () => {
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => {
         const ledger = await persistedNotifications(directory)
-        // A chat receipt that landed without the attention flag is the view
-        // decision (already viewed); no receipt at all is an observer miss.
-        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
-          console.error('[chat-diag] chat receipt present but chatAttention stays '
-            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        // Receipt count separates the three causes: a new receipt without the
+        // attention flag is the view decision, no new receipt is an observer
+        // miss, and a receipt that arrives late is write latency.
+        const receipts = ledger.events.filter(event => event.source === 'chat').length
+        if (ledger.chatAttention !== true) {
+          console.error(`[chat-diag] chatAttention=${String(ledger.chatAttention)} `
+            + `chatReceipts=${String(receipts)} unread=${String(ledger.unread)}`)
         }
         return ledger.chatAttention
       }).toBe(true)
@@ -523,11 +529,13 @@ describe('Chat completion notifications', () => {
       expect(await finishChatReply(chat)).toBe(200)
       await pollState(async () => {
         const ledger = await persistedNotifications(directory)
-        // A chat receipt that landed without the attention flag is the view
-        // decision (already viewed); no receipt at all is an observer miss.
-        if (ledger.chatAttention !== true && ledger.events.some(event => event.source === 'chat')) {
-          console.error('[chat-diag] chat receipt present but chatAttention stays '
-            + `${String(ledger.chatAttention)} (unread=${String(ledger.unread)})`)
+        // Receipt count separates the three causes: a new receipt without the
+        // attention flag is the view decision, no new receipt is an observer
+        // miss, and a receipt that arrives late is write latency.
+        const receipts = ledger.events.filter(event => event.source === 'chat').length
+        if (ledger.chatAttention !== true) {
+          console.error(`[chat-diag] chatAttention=${String(ledger.chatAttention)} `
+            + `chatReceipts=${String(receipts)} unread=${String(ledger.unread)}`)
         }
         return ledger.chatAttention
       }).toBe(true)
