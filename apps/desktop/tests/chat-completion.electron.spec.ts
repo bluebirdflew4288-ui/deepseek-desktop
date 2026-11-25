@@ -34,11 +34,28 @@ const fixtureRoot = resolve(desktopRoot, 'tests/fixtures/dual-mode-app')
 
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
   assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
-  return await _electron.launch({
+  const application = await _electron.launch({
     args: [fixtureRoot],
     cwd: desktopRoot,
     env: { ...process.env, DSH_DESKTOP_FIXTURE_USER_DATA: userDataDirectory },
   })
+  // Enable deterministic window state for this spec only; other specs that share
+  // the dual-mode fixture keep the real BrowserWindow semantics.
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const enabled = await application.evaluate(() => {
+      type FixtureGlobal = typeof globalThis & {
+        __dshDualModeFixture?: { enableWindowSimulation?: () => void }
+      }
+      const fixture = (globalThis as FixtureGlobal).__dshDualModeFixture
+      if (fixture?.enableWindowSimulation === undefined) return false
+      fixture.enableWindowSimulation()
+      return true
+    })
+    if (enabled) break
+    await new Promise((resolveWait) => { setTimeout(resolveWait, 50) })
+  }
+  return application
 }
 
 function isPath(page: Page, path: string): boolean {
