@@ -101,15 +101,22 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
 
   /**
    * Reveal and click a row action, re-hovering if a projection update replaces
-   * the row before its hover-only button becomes visible.
+   * the row or the pointer drops the hover mid-click: the reveal lives on the
+   * row's hover, so visibility alone does not keep the button actionable.
    */
   async function clickHoverAction(row: Locator, name: string): Promise<void> {
     const button = row.getByRole('button', { name })
     await expect.poll(async () => {
       await row.hover()
-      return await button.isVisible()
-    }, { timeout: 10_000 }).toBe(true)
-    await button.click()
+      try {
+        await button.click({ timeout: 2_000 })
+        return true
+      } catch {
+        // The hover reveal evaporated before the click landed; re-hover and try
+        // again inside the poll's deadline.
+        return false
+      }
+    }, { timeout: 20_000 }).toBe(true)
   }
 
   beforeAll(async () => {
