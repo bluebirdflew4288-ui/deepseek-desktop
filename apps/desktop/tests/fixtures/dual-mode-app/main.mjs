@@ -349,7 +349,13 @@ async function boot() {
     chromePreloadPath: join(DESKTOP_DIR, 'lib/mode-chrome-preload.cjs'),
     platform: process.platform,
     createWindow: options => {
-      const win = new BrowserWindow(options)
+      // Hidden windows throttle their renderer on some platforms (timers and
+      // stream reads stretch); the fixture drives whole flows while hidden, so
+      // it keeps the renderer unthrottled.
+      const win = new BrowserWindow({
+        ...options,
+        webPreferences: { ...options.webPreferences, backgroundThrottling: false },
+      })
       const base = {
         hide: win.hide.bind(win), show: win.show.bind(win), focus: win.focus.bind(win),
         blur: win.blur.bind(win), minimize: win.minimize.bind(win), restore: win.restore.bind(win),
@@ -456,6 +462,22 @@ app.on('before-quit', event => {
   if (quitReleased) return
   event.preventDefault()
   void desktopApplication?.requestQuit()
+})
+// Chromium's GPU process is not under test and is a known crash source on
+// headless CI runners, where it surfaces as dead page handles and stalled
+// evaluates. The fixture renders in software; the desktop product keeps normal
+// acceleration.
+app.disableHardwareAcceleration()
+// Chromium process crashes inside tests otherwise read as generic playwright
+// errors; report them through the console so a failure names its own cause.
+app.on('render-process-gone', (_event, _webContents, details) => {
+  console.error('[dual-mode-app] render-process-gone', details.reason, String(details.exitCode))
+})
+app.on('child-process-gone', (_event, details) => {
+  console.error('[dual-mode-app] child-process-gone', details.type, details.reason)
+})
+process.on('uncaughtExceptionMonitor', error => {
+  console.error('[dual-mode-app] uncaughtException', String(error))
 })
 app.whenReady().then(boot).catch(async error => {
   console.error('dual-mode fixture startup failed:', error)

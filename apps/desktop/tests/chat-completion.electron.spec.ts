@@ -86,6 +86,12 @@ async function launch(userDataDirectory: string): Promise<ElectronApplication> {
     cwd: desktopRoot,
     env: { ...process.env, DSH_DESKTOP_FIXTURE_USER_DATA: userDataDirectory },
   })
+  // Surface the fixture app's crash telemetry (render-process-gone and friends)
+  // in test output; playwright otherwise swallows the app console and a crashed
+  // Chromium only shows up as a generic dead-page error.
+  application.on('console', (message) => {
+    if (message.text().startsWith('[dual-mode-app]')) console.error(message.text())
+  })
   // Enable deterministic window state for this spec only; other specs that share
   // the dual-mode fixture keep the real BrowserWindow semantics.
   const deadline = Date.now() + 10_000
