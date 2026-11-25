@@ -358,12 +358,26 @@ async function boot() {
       win.isFocused = () => simulateWindowSimulation ? simFocused : base.isFocused()
       win.isVisible = () => simulateWindowSimulation ? simVisible : base.isVisible()
       win.isMinimized = () => simulateWindowSimulation ? simMinimized : base.isMinimized()
-      win.hide = () => { if (simulateWindowSimulation) { simVisible = false; simFocused = false } return base.hide() }
-      win.show = () => { if (simulateWindowSimulation) { simVisible = true } return base.show() }
-      win.focus = () => { if (simulateWindowSimulation) { simFocused = true; simVisible = true } return base.focus() }
-      win.blur = () => { if (simulateWindowSimulation) { simFocused = false } return base.blur() }
-      win.minimize = () => { if (simulateWindowSimulation) { simMinimized = true; simFocused = false } return base.minimize() }
-      win.restore = () => { if (simulateWindowSimulation) { simMinimized = false } return base.restore() }
+      // A simulated transition emits its own window event after delegating the
+      // real operation: the notification owner reacts to the event stream, and
+      // native delivery is not guaranteed on every host (sandboxed sessions can
+      // suppress window events entirely), so the simulation owns both halves of
+      // the transition. Interactive hosts still emit natively; the observers are
+      // idempotent across the duplicate.
+      const simulateTransition = (event, apply, delegate) => (...args) => {
+        if (simulateWindowSimulation) apply()
+        const result = delegate(...args)
+        if (simulateWindowSimulation) {
+          try { win.emit(event) } catch (_ignore) {}
+        }
+        return result
+      }
+      win.hide = simulateTransition('hide', () => { simVisible = false; simFocused = false }, base.hide)
+      win.show = simulateTransition('show', () => { simVisible = true }, base.show)
+      win.focus = simulateTransition('focus', () => { simFocused = true; simVisible = true }, base.focus)
+      win.blur = simulateTransition('blur', () => { simFocused = false }, base.blur)
+      win.minimize = simulateTransition('minimize', () => { simMinimized = true; simFocused = false }, base.minimize)
+      win.restore = simulateTransition('restore', () => { simMinimized = false }, base.restore)
       fixtureWindows.push(win)
       return win
     },

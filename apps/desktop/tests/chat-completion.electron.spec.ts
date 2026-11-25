@@ -32,6 +32,38 @@ async function setForeground(application: ElectronApplication, on: boolean): Pro
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixtureRoot = resolve(desktopRoot, 'tests/fixtures/dual-mode-app')
 
+// End-to-end Electron flows on hosted runners (app launch, mode switches, one
+// completed reply, durable ledger writes) need headroom well above local
+// runtimes; every internal await is separately bounded and names its own
+// failure, so this deadline only absorbs runner variance.
+const CHAT_TEST_TIMEOUT_MS = 90_000
+
+/**
+ * Poll eventual cross-process state (durable ledger writes, simulated adapter
+ * counts, rendered mode attributes) with an explicit budget: vitest's one-second
+ * default expires before a loaded hosted runner finishes the app-side write this
+ * test then reads.
+ * @param read - Value to re-evaluate until it matches the chained matcher.
+ * @returns The poll assertion carrying the matcher chain.
+ */
+function pollState<T>(read: () => T | Promise<T>) {
+  return expect.poll(read, { timeout: 10_000, interval: 100 })
+}
+
+/**
+ * Close the Electron app with a bound, so a stuck teardown cannot silently
+ * consume the test deadline under another name.
+ * @param application - The application to close, if one launched.
+ * @returns Completion once the app exited or the bound elapsed.
+ */
+async function closeApplication(application: ElectronApplication | undefined): Promise<void> {
+  if (application === undefined) return
+  await Promise.race([
+    application.close(),
+    new Promise((resolveWait) => { setTimeout(resolveWait, 10_000) }),
+  ]).catch(() => undefined)
+}
+
 async function launch(userDataDirectory: string): Promise<ElectronApplication> {
   assertFixtureImportsResolve(resolve(fixtureRoot, 'main.mjs'))
   const application = await _electron.launch({
@@ -87,7 +119,7 @@ async function openChat(application: ElectronApplication): Promise<{ chrome: Pag
   const chrome = await waitForPage(application, '/mode-chrome.html')
   await chrome.locator('#mode-switch').waitFor({ timeout: 8_000 })
   await chrome.locator('#mode-switch [data-mode="chat"]').click()
-  await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
+  await pollState(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
   return { chrome, chat: await waitForPage(application, '/chat') }
 }
 
@@ -98,6 +130,9 @@ async function finishChatReply(chat: Page, path = '/api/v0/chat/completion'): Pr
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: 'hello', parent_message_id: null }),
+      // Bound the same-origin stand-in: a stalled completion names its timeout
+      // instead of silently consuming the test deadline.
+      signal: AbortSignal.timeout(20_000),
     })
     const body = await response.text()
     return body.includes('[DONE]') ? response.status : -response.status
@@ -139,7 +174,7 @@ async function persistedNotifications(directory: string) {
 }
 
 describe('Chat completion notifications', () => {
-  it('alerts for a finished reply while the desktop is hidden, with one Dock reminder and no unread', { timeout: 40_000 }, async () => {
+  it('alerts for a finished reply while the desktop is hidden, with one Dock reminder and no unread', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-'))
     let application: ElectronApplication | undefined
     try {
@@ -147,7 +182,7 @@ describe('Chat completion notifications', () => {
       const { chat } = await openChat(application)
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
       const state = await notificationState(application)
       expect(state.last?.source).toBe('chat')
       expect(state.last?.kind).toBe('completed')
@@ -162,12 +197,12 @@ describe('Chat completion notifications', () => {
       expect(ledger.events).toHaveLength(1)
       expect(ledger.unread).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('suppresses the alert while the desktop is foreground, on either mode', { timeout: 40_000 }, async () => {
+  it('suppresses the alert while the desktop is foreground, on either mode', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-fg-'))
     let application: ElectronApplication | undefined
     try {
@@ -185,7 +220,7 @@ describe('Chat completion notifications', () => {
 
       // Foreground on Harness is still foreground for the desktop as a whole.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
       await setForeground(application, true)
       expect(await finishChatReply(chat)).toBe(200)
       await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })
@@ -200,12 +235,12 @@ describe('Chat completion notifications', () => {
       expect(ledger.unread).toBe(0)
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(2)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('alerts exactly once per finished reply and never for an unrelated request', { timeout: 40_000 }, async () => {
+  it('alerts exactly once per finished reply and never for an unrelated request', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-once-'))
     let application: ElectronApplication | undefined
     try {
@@ -219,16 +254,16 @@ describe('Chat completion notifications', () => {
       expect((await notificationState(application)).count).toBe(0)
 
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
       await new Promise((resolveWait) => { setTimeout(resolveWait, 600) })
       expect((await notificationState(application)).count).toBe(1)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('treats a regenerated answer as a new occurrence, repeatedly', { timeout: 40_000 }, async () => {
+  it('treats a regenerated answer as a new occurrence, repeatedly', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-regenerate-'))
     let application: ElectronApplication | undefined
     try {
@@ -237,27 +272,27 @@ describe('Chat completion notifications', () => {
 
       // Foreground on Harness: a regeneration must raise the dot and stay silent.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
       await setForeground(application, true)
 
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
       await new Promise((resolveWait) => { setTimeout(resolveWait, 600) })
       expect((await notificationState(application)).count).toBe(0)
       // Foreground on Harness: suppressed banner, but the unseen Chat reply is
       // counted once in the Dock number.
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       // Clearing must not poison the next regeneration: a repeat is a new occurrence.
       await chrome.locator('#mode-switch [data-mode="chat"]').click()
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(0)
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
 
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       // Background regeneration alerts, and the ledger still holds one receipt each.
       // Switch to Harness while the window is still visible, then hide it: a
@@ -265,20 +300,20 @@ describe('Chat completion notifications', () => {
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat, '/api/v0/chat/regenerate')).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
       // A second unseen regeneration raises the Dock number to two.
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(2)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(2)
       const ledger = await persistedNotifications(directory)
       expect(ledger.chatPendingCount).toBe(2)
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(3)
       expect(ledger.unread).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('notifies for a continuation and stays silent when the user stops the stream', { timeout: 40_000 }, async () => {
+  it('notifies for a continuation and stays silent when the user stops the stream', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-continue-'))
     let application: ElectronApplication | undefined
     try {
@@ -288,7 +323,7 @@ describe('Chat completion notifications', () => {
 
       // A continuation that runs to completion is a finished answer.
       expect(await finishChatReply(chat, '/api/v0/chat/continue')).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
 
       // A generation the user stops must not be announced, even though its
       // transport still ends with 200 exactly like a finished answer.
@@ -311,12 +346,12 @@ describe('Chat completion notifications', () => {
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(1)
       expect(ledger.unread).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('restores the desktop and selects Chat when the notification is clicked', { timeout: 40_000 }, async () => {
+  it('restores the desktop and selects Chat when the notification is clicked', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-click-'))
     let application: ElectronApplication | undefined
     try {
@@ -324,26 +359,26 @@ describe('Chat completion notifications', () => {
       const { chrome, chat } = await openChat(application)
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
 
       await application.evaluate(() => {
         (globalThis as typeof globalThis & { __dshDualModeFixture: ChatNotificationFixture }).__dshDualModeFixture.clickNotification()
       })
-      await expect.poll(() => application!.evaluate(({ BrowserWindow }) => {
+      await pollState(() => application!.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
         return window?.isVisible() === true && !window.isMinimized()
       })).toBe(true)
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
       // Following the notification into Chat is an explicit entry, so the reminder clears.
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('acknowledges the Chat reminder when the app returns to the foreground on Chat', { timeout: 40_000 }, async () => {
+  it('acknowledges the Chat reminder when the app returns to the foreground on Chat', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-foreground-'))
     let application: ElectronApplication | undefined
     try {
@@ -351,28 +386,28 @@ describe('Chat completion notifications', () => {
       const { chrome, chat } = await openChat(application)
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       // No notification was clicked: the user brought the app back to the surface
       // that already shows Chat, which is the acknowledgement this case pins.
       await setForeground(application, true)
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(0)
       // The rendered Chat dot follows the acknowledged state, and acknowledging it
       // never touches the receipts or unread accounting.
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="chat"]')
         .getAttribute('data-attention')).not.toBe('true')
       const ledger = await persistedNotifications(directory)
       expect(ledger.unread).toBe(0)
       expect(ledger.events.filter(event => event.source === 'chat')).toHaveLength(1)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('keeps the Chat reminder while the foreground returns to Harness, then clears it on entry', { timeout: 40_000 }, async () => {
+  it('keeps the Chat reminder while the foreground returns to Harness, then clears it on entry', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-attention-entry-'))
     let application: ElectronApplication | undefined
     try {
@@ -380,10 +415,10 @@ describe('Chat completion notifications', () => {
       const { chrome, chat } = await openChat(application)
       // Leave Chat before the reply lands, so Harness is what stays on screen.
       await chrome.locator('#mode-switch [data-mode="harness"]').click()
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(() => chrome.locator('#mode-switch [data-mode="harness"]').getAttribute('aria-checked')).toBe('true')
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).toBe(true)
 
       await setForeground(application, true)
       // Acknowledgement is scoped to the source in view: a return to Harness must not
@@ -391,23 +426,23 @@ describe('Chat completion notifications', () => {
       await new Promise((resolveWait) => { setTimeout(resolveWait, 800) })
       const foreground = await persistedNotifications(directory)
       expect(foreground.chatAttention).toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(1)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(1)
 
       await chrome.locator('#mode-switch [data-mode="chat"]').click()
-      await expect.poll(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
-      await expect.poll(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
-      await expect.poll(async () => (await notificationState(application!)).badge).toBe(0)
+      await pollState(() => chrome.locator('#mode-switch [data-mode="chat"]').getAttribute('aria-checked')).toBe('true')
+      await pollState(async () => (await persistedNotifications(directory)).chatAttention).not.toBe(true)
+      await pollState(async () => (await notificationState(application!)).badge).toBe(0)
       // Clearing the dot never touches the receipts or unread accounting.
       const ledger = await persistedNotifications(directory)
       expect(ledger.unread).toBe(0)
       expect(ledger.harnessAttention).not.toBe(true)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('stays silent when the reply is cancelled mid-stream', { timeout: 40_000 }, async () => {
+  it('stays silent when the reply is cancelled mid-stream', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-abort-'))
     let application: ElectronApplication | undefined
     try {
@@ -443,12 +478,12 @@ describe('Chat completion notifications', () => {
       await new Promise((resolveWait) => { setTimeout(resolveWait, 1200) })
       expect((await notificationState(application)).count).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
 
-  it('never replays a persisted reply after a restart', { timeout: 40_000 }, async () => {
+  it('never replays a persisted reply after a restart', { timeout: CHAT_TEST_TIMEOUT_MS }, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-chat-completion-restart-'))
     let application: ElectronApplication | undefined
     try {
@@ -456,7 +491,7 @@ describe('Chat completion notifications', () => {
       const { chat } = await openChat(application)
       await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.hide() })
       expect(await finishChatReply(chat)).toBe(200)
-      await expect.poll(async () => (await notificationState(application!)).count).toBe(1)
+      await pollState(async () => (await notificationState(application!)).count).toBe(1)
       await application.close()
 
       application = await launch(directory)
@@ -466,7 +501,7 @@ describe('Chat completion notifications', () => {
       // ever sees requests made after this launch.
       expect((await notificationState(application)).count).toBe(0)
     } finally {
-      await application?.close().catch(() => undefined)
+      await closeApplication(application)
       await rm(directory, { recursive: true, force: true })
     }
   })
