@@ -30,6 +30,50 @@ describe('desktop state persistence', () => {
     await expect(loadDesktopState(filename)).resolves.toEqual({ mode: 'chat', theme: 'dark', locale: 'zh-CN' })
   })
 
+  it('retries a transient operating-system failure until the write lands', async () => {
+    const filename = await stateFile()
+    let failures = 2
+    const flaky = async (target: string, content: string, options: { mode: number; dirMode: number }): Promise<void> => {
+      if (failures > 0) {
+        failures -= 1
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      }
+      await writeFile(target, content, { mode: options.mode })
+    }
+    await saveDesktopState(filename, { mode: 'chat' }, flaky)
+    expect(failures).toBe(0)
+    await expect(loadDesktopState(filename)).resolves.toEqual({ mode: 'chat' })
+  })
+
+  it('propagates a real failure on the first attempt', async () => {
+    const filename = await stateFile()
+    let attempts = 0
+    const fatal = async (): Promise<void> => {
+      attempts += 1
+      throw Object.assign(new Error('no space'), { code: 'ENOSPC' })
+    }
+    await expect(saveDesktopState(filename, { mode: 'chat' }, fatal)).rejects.toThrow('no space')
+    expect(attempts).toBe(1)
+  })
+
+  it('gives up on a persistent transient failure inside a bounded window', async () => {
+    const filename = await stateFile()
+    const previous = process.env.DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS
+    process.env.DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS = '250'
+    try {
+      let attempts = 0
+      const stuck = async (): Promise<void> => {
+        attempts += 1
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      }
+      await expect(saveDesktopState(filename, { mode: 'chat' }, stuck)).rejects.toThrow('busy')
+      expect(attempts).toBeGreaterThan(1)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS
+      else process.env.DSH_TEST_DESKTOP_STATE_SAVE_RETRY_MS = previous
+    }
+  })
+
   it('omits a preference the user has not chosen rather than persisting a default', async () => {
     const filename = await stateFile()
     await saveDesktopState(filename, { mode: 'harness' })
