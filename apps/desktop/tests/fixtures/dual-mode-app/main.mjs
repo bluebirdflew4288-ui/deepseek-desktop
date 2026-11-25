@@ -302,13 +302,18 @@ globalThis.__dshDualModeFixture = {
   enableWindowSimulation() { simulateWindowSimulation = true },
   setForeground(on) {
     simulateWindowSimulation = true
+    // Drive the REAL window operation too, so the simulated state and the actual
+    // interactive state stay consistent (hide/show/focus update both).
     if (on) { simFocused = true; simVisible = true; simMinimized = false }
     else { simFocused = false }
     for (const win of fixtureWindows) {
       if (on) {
+        try { win.show() } catch (_ignore) {}
+        try { win.focus() } catch (_ignore) {}
         try { win.emit('show') } catch (_ignore) {}
         try { win.emit('focus') } catch (_ignore) {}
       } else {
+        try { win.hide() } catch (_ignore) {}
         try { win.emit('blur') } catch (_ignore) {}
       }
     }
