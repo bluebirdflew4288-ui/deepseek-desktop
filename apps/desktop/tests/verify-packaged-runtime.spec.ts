@@ -125,8 +125,13 @@ describe('packaged desktop runtime verification', () => {
       }
       await verifyPackagedRuntime(context(appOutDir, 'win32'), stagedRoot)
       const packagedNpmCli = join(appOutDir, 'resources', 'npm', 'bin', 'npm-cli.js')
-      await writeFile(packagedNpmCli, `process.stdout.write('${(await pin()).version}')`)
-      await writeFile(join(appOutDir, 'resources/npm/bin/npx-cli.js'), `process.stdout.write('${(await pin()).version}')`)
+      // Real `npm --version`/`npx --version` end their output with a newline; the
+      // ownership probe is the compound `node && npm && npx`, whose output is split
+      // on newlines. A fixture that omitted the newline would glue both versions
+      // into `11.12.111.12.1` and be misread as an ownership mismatch.
+      const versionOutput = `process.stdout.write('${(await pin()).version}\\n')`
+      await writeFile(packagedNpmCli, versionOutput)
+      await writeFile(join(appOutDir, 'resources/npm/bin/npx-cli.js'), versionOutput)
       await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).resolves.toBeUndefined()
       await writeFile(packagedNpmCli, 'process.exit(17)')
       await expect(verifyWindowsPackagedRuntime(appOutDir, 'DeepSeek Desktop')).rejects.toThrow(/did not execute/)
