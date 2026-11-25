@@ -29,7 +29,12 @@ describe('headless-agent keyless smoke', () => {
         if (relativePath === undefined) return
         const compressed = await readFile(join(cwd, relativePath))
         expect(compressed.subarray(0, 4).toString('hex')).toBe('28b52ffd')
-        persistedHeader = JSON.parse((await decompress(compressed)).toString()) as Record<string, unknown>
+        // The persisted log is JSONL: the independently decodable first frame
+        // holds the header record; later frames hold event records. Decode once
+        // and parse the header record from the first non-empty line — never
+        // JSON.parse the whole multi-record stream.
+        const records = (await decompress(compressed)).toString().split('\n').filter(line => line.length > 0)
+        persistedHeader = JSON.parse(records[0] ?? '') as Record<string, unknown>
       },
     })
     const lines = stdout.trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)

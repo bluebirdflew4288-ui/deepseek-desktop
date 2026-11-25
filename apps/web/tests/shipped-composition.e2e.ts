@@ -10,6 +10,7 @@ import { afterEach, expect, it } from 'vitest'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import { canonicalPath, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 // Empty type imports carry the tools/sandboxPolicy/approval Context merges.
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
@@ -103,7 +104,11 @@ it('assembles the shipped Web catalog, file-reference guidance, and confined acc
   // explicit mode keeps the claim independent of this surface's default, and
   // keeps a future sandbox-confinement test from being run inside /tmp — where an
   // "escape" write succeeds by design and reads as a sandbox failure.
-  expect(writableRoots(scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write' }))).toEqual(
+  // A workspace-write policy admits writable roots only when a session cwd
+  // resolves it: a session-less request degrades to read-only by design, so
+  // supply the workspace session rather than asserting on the degraded result.
+  const workspaceSession = { id: 'shipped-composition', header: { cwd: scaffold.workspaceCwd }, events: [] } as unknown as Session
+  expect(writableRoots(scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write', session: workspaceSession }))).toEqual(
     expect.arrayContaining([canonicalPath('/tmp'), canonicalPath(tmpdir())]),
   )
   expect(scaffold.ctx.sandboxPolicy.defaultMode).toBe('workspace-write')

@@ -125,8 +125,8 @@ jobs:
       # four workers. The failover pool shares one 64-core VM across six
       # always-on runner instances, so it may use eight (worst case 8 × 6 = 48
       # workers); process-bound suites remain isolated in forks.
-      DSH_COVERAGE_MAX_WORKERS: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '4' }}
-      DSH_GATE_CONCURRENCY: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '3' || '2' }}
+      DSH_COVERAGE_MAX_WORKERS: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '2' }}
+      DSH_GATE_CONCURRENCY: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '3' || '1' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -172,8 +172,24 @@ jobs:
           if (( install_status != 0 )); then exit "$install_status"; fi
           exit "$sandbox_status"
 
+      # The coverage aggregate runs every unit suite plus the Desktop Electron
+      # fixtures, so it needs the same compiled tree the consumer lane builds:
+      # workspace/Desktop lib output, the pinned npm runtime staged by
+      # `stage:npm`, and a materialized Electron binary. Building does not shift
+      # measurement off source: the tsconfig paths map resolves
+      # `@deepseek-ai/dsh-*` to `src`, so `coverage.include` keeps measuring
+      # `packages/*/src` (verified after removing the committed `src/*.js`).
+      - name: Build workspace and stage the Desktop runtime
+        run: |
+          pnpm run build
+          pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
+          pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
+
+      - name: Install xvfb for the Electron fixtures
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+
       - name: Run exhaustive coverage
-        run: pnpm run check:ci:coverage
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" pnpm run check:ci:coverage
 
   node-24-consumers:
     if: github.event_name == 'pull_request'
@@ -483,6 +499,16 @@ jobs:
       - name: Install (immutable)
         shell: pwsh
         run: pnpm install --frozen-lockfile
+
+      # The complete inventory schedules coverage and the Desktop fixtures beside
+      # the build gate, but those gates need built `lib/`, the staged
+      # `runtime-npm`, and a materialized Electron binary before they start.
+      - name: Build workspace and stage the Desktop runtime
+        shell: pwsh
+        run: |
+          pnpm run build
+          pnpm --filter @deepseek-ai/dsh-desktop run stage:npm
+          pnpm --filter @deepseek-ai/dsh-desktop run materialize:electron
 
       - name: Run complete native Windows gate inventory
         shell: pwsh

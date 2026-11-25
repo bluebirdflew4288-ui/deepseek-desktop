@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -262,6 +263,15 @@ let notificationBadge = 0
 let notificationCount = 0
 let notificationEvent
 let notificationClick
+// Opt-in simulated window state so a non-interactive runner can drive foreground
+// deterministically. Off by default: other specs that share this fixture keep the
+// real BrowserWindow semantics. When enabled, the observed state transitions with
+// the real hide/show/focus/blur/minimize/restore calls rather than being constant.
+let simulateWindowSimulation = false
+let simFocused = true
+let simVisible = true
+let simMinimized = false
+const fixtureWindows = []
 const harnessUpdateActions = []
 const notificationAdapter = {
   supported: () => true,
@@ -290,6 +300,25 @@ globalThis.__dshDualModeFixture = {
   state: fixtureState,
   showHarnessUpdate(view) { desktopApplication.publishHarnessUpdate(view) },
   harnessUpdateActions: () => [...harnessUpdateActions],
+  enableWindowSimulation() { simulateWindowSimulation = true },
+  setForeground(on) {
+    simulateWindowSimulation = true
+    // Drive the REAL window operation too, so the simulated state and the actual
+    // interactive state stay consistent (hide/show/focus update both).
+    if (on) { simFocused = true; simVisible = true; simMinimized = false }
+    else { simFocused = false }
+    for (const win of fixtureWindows) {
+      if (on) {
+        try { win.show() } catch (_ignore) {}
+        try { win.focus() } catch (_ignore) {}
+        try { win.emit('show') } catch (_ignore) {}
+        try { win.emit('focus') } catch (_ignore) {}
+      } else {
+        try { win.hide() } catch (_ignore) {}
+        try { win.emit('blur') } catch (_ignore) {}
+      }
+    }
+  },
 }
 
 function closeServers() {
@@ -307,10 +336,12 @@ function releaseQuit() {
 }
 
 async function boot() {
+  traceBoot('start')
   ;[harnessServer, chatServer] = await Promise.all([
     startFixtureServer('harness'),
     startFixtureServer('chat'),
   ])
+  traceBoot('servers')
   const chatSession = session.fromPartition(CHAT_PARTITION)
   desktopApplication = createDesktopApplication({
     notificationAdapter,
@@ -320,7 +351,47 @@ async function boot() {
     chromePath: join(DESKTOP_DIR, 'resources/mode-chrome.html'),
     chromePreloadPath: join(DESKTOP_DIR, 'lib/mode-chrome-preload.cjs'),
     platform: process.platform,
-    createWindow: options => new BrowserWindow(options),
+    createWindow: options => {
+      traceBoot('create-window')
+      // Hidden windows throttle their renderer on some platforms (timers and
+      // stream reads stretch); the fixture drives whole flows while hidden, so
+      // it keeps the renderer unthrottled.
+      const win = new BrowserWindow({
+        ...options,
+        webPreferences: { ...options.webPreferences, backgroundThrottling: false },
+      })
+      const base = {
+        hide: win.hide.bind(win), show: win.show.bind(win), focus: win.focus.bind(win),
+        blur: win.blur.bind(win), minimize: win.minimize.bind(win), restore: win.restore.bind(win),
+        isFocused: win.isFocused.bind(win), isVisible: win.isVisible.bind(win), isMinimized: win.isMinimized.bind(win),
+      }
+      win.isFocused = () => simulateWindowSimulation ? simFocused : base.isFocused()
+      win.isVisible = () => simulateWindowSimulation ? simVisible : base.isVisible()
+      win.isMinimized = () => simulateWindowSimulation ? simMinimized : base.isMinimized()
+      // A simulated transition emits its own window event after delegating the
+      // real operation: the notification owner reacts to the event stream, and
+      // native delivery is not guaranteed on every host (sandboxed sessions can
+      // suppress window events entirely), so the simulation owns both halves of
+      // the transition. Interactive hosts still emit natively; the observers are
+      // idempotent across the duplicate.
+      const simulateTransition = (event, apply, delegate) => (...args) => {
+        if (simulateWindowSimulation) apply()
+        const result = delegate(...args)
+        if (simulateWindowSimulation) {
+          try { win.emit(event) } catch (_ignore) {}
+        }
+        return result
+      }
+      win.hide = simulateTransition('hide', () => { simVisible = false; simFocused = false }, base.hide)
+      win.show = simulateTransition('show', () => { simVisible = true }, base.show)
+      win.focus = simulateTransition('focus', () => { simFocused = true; simVisible = true }, base.focus)
+      win.blur = simulateTransition('blur', () => { simFocused = false }, base.blur)
+      win.minimize = simulateTransition('minimize', () => { simMinimized = true; simFocused = false }, base.minimize)
+      win.restore = simulateTransition('restore', () => { simMinimized = false }, base.restore)
+      fixtureWindows.push(win)
+      traceBoot('window-created')
+      return win
+    },
     createView: options => {
       const view = new WebContentsView(options)
       allViews.add(view)
@@ -354,16 +425,23 @@ async function boot() {
     ),
     // The fixture's own origin stands in for the audited Chat completion endpoint,
     // so the real observer wiring is exercised without reaching the real website.
+    // The observer calls these matchers from both its start and its completion
+    // listener; the trace therefore separates "the request never reached
+    // webRequest", "the completion was never detected", and a state-logic drop.
     chatCompletionMatch: url => {
       try {
-        return CHAT_COMPLETION_PATHS.includes(new URL(url).pathname)
+        const matched = CHAT_COMPLETION_PATHS.includes(new URL(url).pathname)
+        traceBoot('match ' + (matched ? 'hit' : 'miss') + ' ' + String(url))
+        return matched
       } catch {
         return false
       }
     },
     chatCompletionStopMatch: url => {
       try {
-        return new URL(url).pathname === CHAT_STOP_PATH
+        const matched = new URL(url).pathname === CHAT_STOP_PATH
+        if (matched) traceBoot('match stop ' + String(url))
+        return matched
       } catch {
         return false
       }
@@ -388,6 +466,7 @@ async function boot() {
     bringAllToFront: 'Bring All to Front',
   }, process.platform)
   Menu.setApplicationMenu(menu)
+  traceBoot('menu')
 }
 
 app.on('window-all-closed', () => {})
@@ -397,6 +476,32 @@ app.on('before-quit', event => {
   event.preventDefault()
   void desktopApplication?.requestQuit()
 })
+// Chromium's GPU process is not under test and is a known crash source on
+// headless CI runners, where it surfaces as dead page handles and stalled
+// evaluates. The fixture renders in software; the desktop product keeps normal
+// acceleration.
+app.disableHardwareAcceleration()
+// Chromium process crashes inside tests otherwise read as generic playwright
+// errors; report them through the console so a failure names its own cause.
+app.on('render-process-gone', (_event, _webContents, details) => {
+  console.error('[dual-mode-app] render-process-gone', details.reason, String(details.exitCode))
+})
+app.on('child-process-gone', (_event, details) => {
+  console.error('[dual-mode-app] child-process-gone', details.type, details.reason)
+})
+process.on('uncaughtExceptionMonitor', error => {
+  console.error('[dual-mode-app] uncaughtException', String(error))
+})
+// Boot breadcrumbs: a launch that never settles loses the console channel, so
+// the same trail goes to the test-owned file named by DSH_FIXTURE_BOOT_LOG.
+function traceBoot(step) {
+  console.error('[dual-mode-app] boot:' + step)
+  if (typeof process.env.DSH_FIXTURE_BOOT_LOG === 'string') {
+    try {
+      appendFileSync(process.env.DSH_FIXTURE_BOOT_LOG, step + '\n')
+    } catch (_ignored) { /* diagnostics only */ }
+  }
+}
 app.whenReady().then(boot).catch(async error => {
   console.error('dual-mode fixture startup failed:', error)
   await closeServers()

@@ -345,6 +345,28 @@ function lockOwnerIsAlive(owner) {
   }
 }
 
+/**
+ * Whether an exclusive-CREATE failure is transient lock contention rather than a
+ * real permission error.
+ *
+ * Windows reports a concurrently held `wx` create as EPERM/EACCES instead of
+ * EEXIST while the creator's handle is still open (the record is published a
+ * moment later). Contention is only assumed when the lock path already exists as
+ * a regular file; an absent or non-regular path stays a genuine failure that
+ * propagates unchanged, so a real access denial is never swallowed. Callers must
+ * apply this only to the `openSync('wx')` stage: once the create succeeded the
+ * lock is ours, so a later EPERM/EACCES (for example on the owner-record write)
+ * is a genuine failure, never contention.
+ * @param code - Error code from the failed exclusive create.
+ * @param lockPath - Lock path that is already known to exist as a regular file.
+ * @returns True when the existing lock file makes this contention.
+ */
+function installLockCreateContention(code, lockPath) {
+  if (code !== 'EPERM' && code !== 'EACCES') return false
+  const stat = installLockStat(lockPath)
+  return stat !== undefined && stat.isFile() && !stat.isSymbolicLink()
+}
+
 function manualLockRecoveryError(lockPath, condition) {
   return new Error(
     `${condition} Lefthook installer lock ${JSON.stringify(lockPath)}. `
@@ -384,8 +406,13 @@ async function acquireInstallLock(commonDirectory) {
   const ownedRecord = `${String(process.pid)} ${randomUUID()}\n`
   let initializingLock
   while (true) {
+    // Set only once openSync returned the owned handle. EPERM/EACCES contention
+    // classification applies to the exclusive-create stage alone; every later
+    // failure (record write, published-stat check) is a real error to propagate.
+    let exclusiveCreateDone = false
     try {
       const lockHandle = openSync(lockPath, 'wx', 0o600)
+      exclusiveCreateDone = true
       let ownedStat
       try {
         ownedStat = fstatSync(lockHandle)
@@ -409,7 +436,10 @@ async function acquireInstallLock(commonDirectory) {
       }
       return () => releaseInstallLock(lockPath, ownedRecord, ownedStat)
     } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error
+      const createErrorCode = errorCode(error)
+      if (exclusiveCreateDone || (createErrorCode !== 'EEXIST' && !installLockCreateContention(createErrorCode, lockPath))) {
+        throw error
+      }
       const existingStat = installLockStat(lockPath)
       if (existingStat === undefined) continue
       if (!existingStat.isFile() || existingStat.isSymbolicLink()) {

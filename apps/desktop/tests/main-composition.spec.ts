@@ -178,7 +178,10 @@ function fakeSystemTheme(initial: DesktopColorScheme = 'dark') {
 
 const roots: string[] = []
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  // A child process may still be flushing its last write when the test ends, so
+  // `rm` can observe a just-created entry and throw ENOTEMPTY. Retry the removal
+  // rather than leaving the temp roots behind or swallowing the error.
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })))
 })
 
 async function stateFile(): Promise<string> {

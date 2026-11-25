@@ -69,23 +69,73 @@ interface PersistedLog {
   readonly header: JsonObject
 }
 
+interface DeepSeekRequestDiagnostic {
+  readonly receivedAt: number
+  readonly path: string | undefined
+  readonly model: unknown
+  readonly maxTokens: unknown
+  readonly messageRoles: unknown[]
+  clientAborted: boolean
+}
+
 interface DeepSeekDefaultsServer {
   readonly url: string
   readonly requests: JsonObject[]
+  readonly diagnostics: DeepSeekRequestDiagnostic[]
   close(): Promise<void>
+}
+
+/**
+ * Summarize each captured request so a duplicate-request failure names its source
+ * without leaking credentials or full message content.
+ * @param diagnostics - One entry per request the mock server accepted.
+ * @returns A compact JSON array of timing, endpoint, model, message roles, and abort state.
+ */
+function describeDeepSeekRequests(diagnostics: readonly DeepSeekRequestDiagnostic[]): string {
+  const first = diagnostics[0]?.receivedAt
+  return JSON.stringify(diagnostics.map((entry, index) => ({
+    index,
+    msSinceFirst: first === undefined ? 0 : entry.receivedAt - first,
+    path: entry.path,
+    model: entry.model,
+    maxTokens: entry.maxTokens,
+    messageRoles: entry.messageRoles,
+    clientAborted: entry.clientAborted,
+  })))
 }
 
 /** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
 async function deepseekDefaultsServer(): Promise<DeepSeekDefaultsServer> {
   const requests: JsonObject[] = []
+  const diagnostics: DeepSeekRequestDiagnostic[] = []
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     request.setEncoding('utf8')
     request.on('data', (chunk: string) => { body += chunk })
     request.on('end', () => {
-      requests.push(JSON.parse(body) as JsonObject)
+      const parsed = JSON.parse(body) as JsonObject
+      requests.push(parsed)
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : []
+      const diagnostic: DeepSeekRequestDiagnostic = {
+        receivedAt: Date.now(),
+        path: request.url,
+        model: parsed.model,
+        maxTokens: parsed.max_tokens,
+        messageRoles: messages.map(entry => (entry !== null && typeof entry === 'object' ? (entry as JsonObject).role : undefined)),
+        clientAborted: false,
+      }
+      diagnostics.push(diagnostic)
+      response.on('close', () => {
+        // A client abort (for example an idle-timeout retry) closes the socket
+        // before the response finished; recording it lets a second request be
+        // classified as a retry of an abandoned stream, not a genuine second send.
+        if (!response.writableEnded) diagnostic.clientAborted = true
+      })
       response.writeHead(200, { 'content-type': 'text/event-stream' })
-      let keepAlives = 3
+      // Ten 60ms keep-alive comments (data at ~660ms) keep the stream alive inside
+      // the 500ms idle budget; without comments the 660ms gap exceeds it, so a
+      // regression that stopped pulsing on comments still fails the run.
+      let keepAlives = 10
       const write = (): void => {
         if (keepAlives-- > 0) {
           response.write(': keep-alive\n\n')
@@ -108,6 +158,7 @@ async function deepseekDefaultsServer(): Promise<DeepSeekDefaultsServer> {
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
+    diagnostics,
     close: () => new Promise(resolve => server.close(() => { resolve() })),
   }
 }
@@ -539,7 +590,7 @@ describe('headless stream-json snapshots', () => {
       })
 
       expect(result.stderr).toBe('')
-      expect(server.requests).toHaveLength(1)
+      expect(server.requests, describeDeepSeekRequests(server.diagnostics)).toHaveLength(1)
       expect(server.requests[0]?.max_tokens).toBe(256_000)
       const header = (parseJsonl(result.stdout)
         .map(record => record.event)

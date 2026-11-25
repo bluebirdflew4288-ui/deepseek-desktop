@@ -795,7 +795,7 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
       return promoted ? { outcome: 'promoted', version } : { outcome: 'failed', reason }
     } finally {
       busy = undefined
-      let rollbackSafe = true
+      let rollbackSafe: boolean = true
       if (!promoted && backupInstallId !== undefined) {
         const target = layout.versionDirectory(version)
         const backup = layout.backupDirectory(transactionId)
@@ -808,8 +808,22 @@ export function createManagedHarnessRuntime(options: ManagedHarnessRuntimeOption
           rollbackSafe = false
           cachedLaunch = undefined
         } else {
-          if (targetId === transactionId) await rm(target, { recursive: true, force: false }).catch(() => { rollbackSafe = false })
-          if (rollbackSafe && oldAtBackup && !existsSync(target)) await rename(backup, target).catch(() => { rollbackSafe = false })
+          if (targetId === transactionId) {
+            try {
+              await rm(target, { recursive: true, force: false })
+            } catch {
+              // A failed target removal leaves the old install unmoved, so rollback is unsafe.
+              rollbackSafe = false
+            }
+          }
+          if (rollbackSafe && oldAtBackup && !existsSync(target)) {
+            try {
+              await rename(backup, target)
+            } catch {
+              // A failed rename leaves the backup unconsumed, so rollback is unsafe.
+              rollbackSafe = false
+            }
+          }
         }
       }
       const artifactsClean = await discardStaging(transactionId).catch(() => false)
